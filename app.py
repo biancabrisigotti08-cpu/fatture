@@ -228,7 +228,38 @@ def to_float(val):
         return None
 
 
+def get_categoria(descrizione: str) -> str:
+
+    """Estrae la categoria dalla descrizione, solo parole chiave specifiche."""
+
+    d = descrizione.lower()
+
+    if "forfait" in d:
+
+        return "Forfait"
+
+    if "over plafond" in d:
+
+        return "Over Plafond"
+
+    if "km eccedenti" in d:
+
+        return "Km Eccedenti"
+
+    if "eam" in d:
+
+        return "EAM"
+
+    if "tagliando" in d:
+
+        return "Tagliando"
+
+    return ""
+
+
 def build_row(row):
+
+    descrizione = row.get("descrizione", "")
 
     return [
 
@@ -246,7 +277,9 @@ def build_row(row):
 
         to_float(row.get("prezzo_totale", "")),
 
-        row.get("descrizione", ""),
+        descrizione,
+
+        get_categoria(descrizione),
 
     ]
 
@@ -280,9 +313,13 @@ def build_excel(all_rows):
 
                   "Targa", "Telaio", "Prezzo Totale (€)",
 
-                  "Descrizione (Forfait/Over Plafond/ETM/EAM/KM…)"]
+                  "Descrizione (Forfait/Over Plafond/ETM/EAM/KM…)",
 
-    col_widths = [30, 30, 18, 16, 14, 22, 18, 45]
+                  "Descrizione"]
+
+    col_widths = [30, 30, 18, 16, 14, 22, 18, 45, 18]
+
+    CATEGORIE = ["EAM", "Forfait", "Km Eccedenti", "Over Plafond", "Tagliando"]
 
     # Filtra BOLLO
 
@@ -316,6 +353,8 @@ def build_excel(all_rows):
 
     wb = openpyxl.Workbook()
 
+    # ── Foglio 1: Fatture ──
+
     ws1 = wb.active
 
     ws1.title = "Fatture"
@@ -326,6 +365,8 @@ def build_excel(all_rows):
 
         ws1.append(build_row(row))
 
+    # ── Foglio 2: Duplicati ──
+
     ws2 = wb.create_sheet(title="Duplicati")
 
     write_header(ws2, headers, col_widths)
@@ -333,6 +374,110 @@ def build_excel(all_rows):
     for row in dups:
 
         ws2.append(build_row(row))
+
+    # ── Foglio 3: Riepilogo pivot (Telaio × Categoria) ──
+
+    ws3 = wb.create_sheet(title="Riepilogo")
+
+    # Costruisci dizionario: {telaio: {categoria: somma}}
+
+    pivot = {}
+
+    for r in uniq:
+
+        telaio = r.get("telaio", "")
+
+        cat    = get_categoria(r.get("descrizione", ""))
+
+        if not telaio or not cat:
+
+            continue
+
+        if telaio not in pivot:
+
+            pivot[telaio] = {c: 0.0 for c in CATEGORIE}
+
+        val = to_float(r.get("prezzo_totale", "")) or 0.0
+
+        if cat in pivot[telaio]:
+
+            pivot[telaio][cat] += val
+
+    # Intestazione riepilogo
+
+    header_fill = PatternFill("solid", fgColor=HEADER_BG)
+
+    header_font = Font(bold=True, color=HEADER_FONT)
+
+    riepilogo_headers = ["Telaio"] + CATEGORIE + ["Grand Total"]
+
+    riepilogo_widths  = [22] + [16] * len(CATEGORIE) + [16]
+
+    for c, (h, w) in enumerate(zip(riepilogo_headers, riepilogo_widths), start=1):
+
+        cell = ws3.cell(row=1, column=c, value=h)
+
+        cell.fill = header_fill
+
+        cell.font = header_font
+
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+        ws3.column_dimensions[openpyxl.utils.get_column_letter(c)].width = w
+
+    ws3.row_dimensions[1].height = 20
+
+    ws3.freeze_panes = "A2"
+
+    # Righe dati
+
+    num_fmt = '#,##0.00'
+
+    for telaio in sorted(pivot.keys()):
+
+        vals = [pivot[telaio].get(c, 0.0) for c in CATEGORIE]
+
+        grand_total = sum(v for v in vals if v)
+
+        row_data = [telaio] + [v if v else None for v in vals] + [grand_total]
+
+        ws3.append(row_data)
+
+        # Formato numerico sulle celle numeriche
+
+        row_idx = ws3.max_row
+
+        for col_idx in range(2, len(row_data) + 1):
+
+            ws3.cell(row=row_idx, column=col_idx).number_format = num_fmt
+
+    # Riga Grand Total in fondo
+
+    total_row_idx = ws3.max_row + 1
+
+    ws3.cell(total_row_idx, 1, "Grand Total").font = Font(bold=True)
+
+    for ci, cat in enumerate(CATEGORIE, start=2):
+
+        col_total = sum(pivot[t].get(cat, 0.0) for t in pivot)
+
+        cell = ws3.cell(total_row_idx, ci, col_total if col_total else None)
+
+        cell.font = Font(bold=True)
+
+        cell.number_format = num_fmt
+
+    grand = sum(
+
+        sum(pivot[t].get(c, 0.0) for c in CATEGORIE) for t in pivot
+
+    )
+
+    gc = ws3.cell(total_row_idx, len(CATEGORIE) + 2, grand)
+
+    gc.font = Font(bold=True)
+
+    gc.number_format = num_fmt
 
     out = io.BytesIO()
 
