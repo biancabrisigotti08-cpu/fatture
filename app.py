@@ -12,8 +12,6 @@ import re
 
 import os
 
-import tempfile
-
 import xml.etree.ElementTree as ET
 
 from pathlib import Path
@@ -23,6 +21,8 @@ from flask import Flask, request, send_file, jsonify, render_template_string
 import openpyxl
 
 from openpyxl.styles import Font, PatternFill, Alignment
+
+import pdfplumber
 
 app = Flask(__name__)
 
@@ -163,7 +163,247 @@ def parse_xml_fattura(xml_bytes):
     }
 
 
-# ─── Processa file (XML o ZIP ricorsivo) ──────────────────────────────────────
+# ─── Parser PDF FatturaPA ──────────────────────────────────────────────────────
+
+def parse_pdf_fattura(pdf_bytes):
+
+    """Estrae dati da un PDF di fattura usando pdfplumber."""
+
+    text = ""
+
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+
+        for page in pdf.pages:
+
+            t = page.extract_text()
+
+            if t:
+
+                text += t + "\n"
+
+    lines = text.splitlines()
+
+    def find_after(label):
+
+        for i, l in enumerate(lines):
+
+            if label.lower() in l.lower():
+
+                # Prova stessa riga dopo il label
+
+                after = re.split(label, l, flags=re.IGNORECASE)[-1].strip()
+
+                if after:
+
+                    return after.split()[0] if after else ""
+
+                # Prova riga successiva
+
+                for j in range(i+1, min(i+4, len(lines))):
+
+                    nl = lines[j].strip()
+
+                    if nl and not re.match(r'^[A-Z /()]{6,}$', nl):
+
+                        return nl
+
+        return ""
+
+    # Cedente: primo blocco dopo CEDENTE/PRESTATORE
+
+    cedente = ""
+
+    for i, l in enumerate(lines):
+
+        if "cedente" in l.lower() and "prestatore" in l.lower():
+
+            for j in range(i+1, min(i+5, len(lines))):
+
+                nl = lines[j].strip()
+
+                if nl and not re.match(r'^[A-Z /()]{6,}$', nl):
+
+                    cedente = nl
+
+                    break
+
+            break
+
+    # Cessionario
+
+    cessionario = ""
+
+    for i, l in enumerate(lines):
+
+        if "cessionario" in l.lower():
+
+            for j in range(i+1, min(i+5, len(lines))):
+
+                nl = lines[j].strip()
+
+                if nl and not re.match(r'^[A-Z /()]{6,}$', nl):
+
+                    cessionario = nl
+
+                    break
+
+            break
+
+    # Numero documento
+
+    numero_documento = ""
+
+    m = re.search(r'NUMERO\s+DOCUMENTO\s*[\n\r]+\s*(\S+)', text, re.IGNORECASE)
+
+    if m:
+
+        numero_documento = m.group(1).strip()
+
+    else:
+
+        m = re.search(r'NUMERO\s+DOCUMENTO\s+(\S+)', text, re.IGNORECASE)
+
+        if m:
+
+            numero_documento = m.group(1).strip()
+
+    # Data documento
+
+    data_documento = ""
+
+    m = re.search(r'DATA\s+DOCUMENTO\s*[\n\r\s]+(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})', text, re.IGNORECASE)
+
+    if m:
+
+        data_documento = m.group(1).strip()
+
+    # Righe dettaglio
+
+    righe = []
+
+    row_start_re = re.compile(r'^\s*(\d+)\s*$')
+
+    desc_re = re.compile(r'([A-Z0-9]{8,})\s+(RMK\S+)\s+(.*)', re.IGNORECASE)
+
+    i = 0
+
+    while i < len(lines):
+
+        line = lines[i].strip()
+
+        if row_start_re.match(line):
+
+            block_lines = []
+
+            j = i + 1
+
+            while j < len(lines):
+
+                next_line = lines[j].strip()
+
+                if row_start_re.match(next_line) and next_line != line:
+
+                    break
+
+                block_lines.append(next_line)
+
+                j += 1
+
+            telaio = ""
+
+            descrizione = ""
+
+            for bl in block_lines:
+
+                md = desc_re.search(bl)
+
+                if md:
+
+                    telaio = md.group(1).strip()
+
+                    descrizione = md.group(3).strip()
+
+                    break
+
+            prezzo_totale = ""
+
+            for bl in reversed(block_lines):
+
+                if re.search(r'\bN\d\b', bl):
+
+                    nums = re.findall(r'[\d]+[.,][\d]+', bl)
+
+                    if nums:
+
+                        prezzo_totale = nums[-1].replace(',', '.')
+
+                    break
+
+            # Escludi bollo
+
+            try:
+
+                if abs(float(prezzo_totale)) == IMPORTO_BOLLO:
+
+                    i = j
+
+                    continue
+
+            except (ValueError, TypeError):
+
+                pass
+
+            if telaio or prezzo_totale:
+
+                righe.append({
+
+                    "telaio": telaio,
+
+                    "descrizione": descrizione,
+
+                    "prezzo_totale": prezzo_totale,
+
+                })
+
+            i = j
+
+        else:
+
+            i += 1
+
+    return {
+
+        "cedente": cedente,
+
+        "cessionario": cessionario,
+
+        "numero_documento": numero_documento,
+
+        "data_documento": data_documento,
+
+        "righe": righe,
+
+    }
+
+
+def process_pdf_bytes(pdf_bytes, all_rows):
+
+    try:
+
+        fattura = parse_pdf_fattura(pdf_bytes)
+
+        righe   = fattura.pop("righe", [])
+
+        for r in righe:
+
+            all_rows.append({**fattura, **r})
+
+        return len(righe)
+
+    except Exception:
+
+        return 0
+
 
 def process_xml_bytes(xml_bytes, all_rows):
 
@@ -198,6 +438,10 @@ def process_zip_bytes(zip_bytes, all_rows, depth=0):
 
                           and not n.lower().endswith('signature.xml')]
 
+            pdf_entries = [n for n in entries if n.lower().endswith('.pdf')
+
+                          and not n.startswith('__MACOSX')]
+
             zip_entries = [n for n in entries if n.lower().endswith('.zip')
 
                           and not n.startswith('__MACOSX')]
@@ -205,6 +449,10 @@ def process_zip_bytes(zip_bytes, all_rows, depth=0):
             for xml_name in xml_entries:
 
                 process_xml_bytes(zf.read(xml_name), all_rows)
+
+            for pdf_name in pdf_entries:
+
+                process_pdf_bytes(zf.read(pdf_name), all_rows)
 
             for zip_name in zip_entries:
 
@@ -375,110 +623,6 @@ def build_excel(all_rows):
 
         ws2.append(build_row(row))
 
-    # ── Foglio 3: Riepilogo pivot (Telaio × Categoria) ──
-
-    ws3 = wb.create_sheet(title="Riepilogo")
-
-    # Costruisci dizionario: {telaio: {categoria: somma}}
-
-    pivot = {}
-
-    for r in uniq:
-
-        telaio = r.get("telaio", "")
-
-        cat    = get_categoria(r.get("descrizione", ""))
-
-        if not telaio or not cat:
-
-            continue
-
-        if telaio not in pivot:
-
-            pivot[telaio] = {c: 0.0 for c in CATEGORIE}
-
-        val = to_float(r.get("prezzo_totale", "")) or 0.0
-
-        if cat in pivot[telaio]:
-
-            pivot[telaio][cat] += val
-
-    # Intestazione riepilogo
-
-    header_fill = PatternFill("solid", fgColor=HEADER_BG)
-
-    header_font = Font(bold=True, color=HEADER_FONT)
-
-    riepilogo_headers = ["Telaio"] + CATEGORIE + ["Grand Total"]
-
-    riepilogo_widths  = [22] + [16] * len(CATEGORIE) + [16]
-
-    for c, (h, w) in enumerate(zip(riepilogo_headers, riepilogo_widths), start=1):
-
-        cell = ws3.cell(row=1, column=c, value=h)
-
-        cell.fill = header_fill
-
-        cell.font = header_font
-
-        cell.alignment = Alignment(horizontal="center", vertical="center")
-
-        ws3.column_dimensions[openpyxl.utils.get_column_letter(c)].width = w
-
-    ws3.row_dimensions[1].height = 20
-
-    ws3.freeze_panes = "A2"
-
-    # Righe dati
-
-    num_fmt = '#,##0.00'
-
-    for telaio in sorted(pivot.keys()):
-
-        vals = [pivot[telaio].get(c, 0.0) for c in CATEGORIE]
-
-        grand_total = sum(v for v in vals if v)
-
-        row_data = [telaio] + [v if v else None for v in vals] + [grand_total]
-
-        ws3.append(row_data)
-
-        # Formato numerico sulle celle numeriche
-
-        row_idx = ws3.max_row
-
-        for col_idx in range(2, len(row_data) + 1):
-
-            ws3.cell(row=row_idx, column=col_idx).number_format = num_fmt
-
-    # Riga Grand Total in fondo
-
-    total_row_idx = ws3.max_row + 1
-
-    ws3.cell(total_row_idx, 1, "Grand Total").font = Font(bold=True)
-
-    for ci, cat in enumerate(CATEGORIE, start=2):
-
-        col_total = sum(pivot[t].get(cat, 0.0) for t in pivot)
-
-        cell = ws3.cell(total_row_idx, ci, col_total if col_total else None)
-
-        cell.font = Font(bold=True)
-
-        cell.number_format = num_fmt
-
-    grand = sum(
-
-        sum(pivot[t].get(c, 0.0) for c in CATEGORIE) for t in pivot
-
-    )
-
-    gc = ws3.cell(total_row_idx, len(CATEGORIE) + 2, grand)
-
-    gc.font = Font(bold=True)
-
-    gc.number_format = num_fmt
-
     out = io.BytesIO()
 
     wb.save(out)
@@ -592,13 +736,13 @@ h1{font-family:"Syne",sans-serif;font-weight:800;font-size:clamp(32px,5vw,58px);
 <div class="header">
 <div class="badge">ESTRATTORE FATTURE</div>
 <h1>XML / ZIP → Excel</h1>
-<p class="sub">Carica i file · Scarica l'Excel con Fatture e Duplicati</p>
+<p class="sub">Carica XML, PDF o ZIP · Scarica l'Excel</p>
 </div>
 <div class="upload-area">
 <label class="drop-zone" id="dropZone">
 <input type="file" id="fileInput" accept=".xml,.zip" multiple style="display:none"/>
 <div class="drop-icon">⬇</div>
-<div class="drop-text">Trascina qui XML o ZIP oppure clicca</div>
+<div class="drop-text">Trascina qui XML, PDF o ZIP oppure clicca</div>
 <div class="drop-sub">Puoi caricare più file contemporaneamente</div>
 </label>
 <div class="or-div">OPPURE</div>
@@ -631,7 +775,7 @@ function addFiles(newFiles) {
 
   const valid = Array.from(newFiles).filter(f =>
 
-    f.name.toLowerCase().endsWith('.xml') || f.name.toLowerCase().endsWith('.zip')
+    f.name.toLowerCase().endsWith('.xml') || f.name.toLowerCase().endsWith('.zip') || f.name.toLowerCase().endsWith('.pdf')
 
   );
 
@@ -843,6 +987,10 @@ def process():
         if name.endswith('.xml'):
 
             process_xml_bytes(data, all_rows)
+
+        elif name.endswith('.pdf'):
+
+            process_pdf_bytes(data, all_rows)
 
         elif name.endswith('.zip'):
 
