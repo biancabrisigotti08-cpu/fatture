@@ -608,9 +608,31 @@ def process_pdf_bytes(pdf_bytes, all_rows):
 
     try:
 
+        # Log testo grezzo per debug
+
+        text_preview = ""
+
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+
+            for page in pdf.pages:
+
+                t = page.extract_text()
+
+                if t:
+
+                    text_preview += t + "\n"
+
+        print("=== PDF TEXT (primi 1500 char) ===")
+
+        print(repr(text_preview[:1500]))
+
+        print("==================================")
+
         fattura = parse_pdf_fattura(pdf_bytes)
 
         righe   = fattura.pop("righe", [])
+
+        print(f"Righe estratte: {len(righe)}")
 
         for r in righe:
 
@@ -618,7 +640,9 @@ def process_pdf_bytes(pdf_bytes, all_rows):
 
         return len(righe)
 
-    except Exception:
+    except Exception as e:
+
+        print(f"Errore PDF: {e}")
 
         return 0
 
