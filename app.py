@@ -1181,6 +1181,43 @@ async function handleRun() {
 </html>'''
 
 
+@app.route('/debug', methods=['POST'])
+
+def debug():
+
+    """Endpoint di debug: restituisce il testo grezzo estratto dal PDF."""
+
+    files = request.files.getlist('files')
+
+    if not files:
+
+        return jsonify({"error": "Nessun file"}), 400
+
+    f = files[0]
+
+    data = f.read()
+
+    text = ""
+
+    try:
+
+        with pdfplumber.open(io.BytesIO(data)) as pdf:
+
+            for page in pdf.pages:
+
+                t = page.extract_text()
+
+                if t:
+
+                    text += t + "\n"
+
+    except Exception as e:
+
+        return jsonify({"error": str(e)}), 500
+
+    return jsonify({"text": text[:3000]})
+
+
 @app.route('/')
 
 def index():
