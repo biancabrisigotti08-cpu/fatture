@@ -10,7 +10,7 @@ from pathlib import Path
 from flask import Flask, request, send_file, jsonify, render_template_string
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
-import pdfplumber
+from pypdf import PdfReader
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max upload
 HEADER_BG   = "FF6B35"
@@ -85,11 +85,11 @@ def parse_xml_fattura(xml_bytes):
 # ─── Parser PDF — formato generico (PSA + Romana Diesel + altri) ──────────────
 def parse_pdf_fattura(pdf_bytes):
    text = ""
-   with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-       for page in pdf.pages:
-           t = page.extract_text()
-           if t:
-               text += t + "\n"
+   reader = PdfReader(io.BytesIO(pdf_bytes))
+   for page in reader.pages:
+       t = page.extract_text()
+       if t:
+           text += t + "\n"
    lines = text.splitlines()
    # Cedente
    cedente = ""
@@ -307,11 +307,11 @@ def process_pdf_bytes(pdf_bytes, all_rows):
    try:
        # Log testo grezzo per debug
        text_preview = ""
-       with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-           for page in pdf.pages:
-               t = page.extract_text()
-               if t:
-                   text_preview += t + "\n"
+       reader = PdfReader(io.BytesIO(pdf_bytes))
+       for page in reader.pages:
+           t = page.extract_text()
+           if t:
+               text_preview += t + "\n"
        print("=== PDF TEXT (primi 1500 char) ===")
        print(repr(text_preview[:1500]))
        print("==================================")
