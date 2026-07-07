@@ -150,72 +150,41 @@ def parse_pdf_fattura(pdf_bytes):
    is_vw_format      = bool(re.search(r'Tipo dato:TELAIO', text, re.IGNORECASE))
    righe = []
    if is_vw_format:
-       # ── Parser Volkswagen: Tipo dato:TELAIO / TARGA estratti dai metadati ──
-       row_start_re = re.compile(r'^\s*(\d+)\s*$')
-       i = 0
-       while i < len(lines):
-           line = lines[i].strip()
-           if row_start_re.match(line):
-               block_lines = []
-               j = i + 1
-               while j < len(lines):
-                   next_line = lines[j].strip()
-                   if row_start_re.match(next_line) and next_line != line:
-                       break
-                   block_lines.append(next_line)
-                   j += 1
-               block_text = "\n".join(block_lines)
-               # Descrizione: prima riga non vuota del blocco
-               descrizione = ""
-               for bl in block_lines:
-                   bl = bl.strip()
-                   if bl and not re.match(r'^Tipo dato:|^Rif\. testo:', bl, re.IGNORECASE):
-                       descrizione = bl
-                       break
-               # Telaio: riga dopo "Tipo dato:TELAIO"
-               telaio = ""
-               for k, bl in enumerate(block_lines):
-                   if re.search(r'Tipo dato:TELAIO', bl, re.IGNORECASE):
-                       for l2 in block_lines[k+1:k+3]:
-                           m2 = re.search(r'Rif\.\s*testo:(\S+)', l2, re.IGNORECASE)
-                           if m2:
-                               telaio = m2.group(1).strip()
-                               break
-                       break
-               # Targa: riga dopo "Tipo dato:TARGA"
-               targa = ""
-               for k, bl in enumerate(block_lines):
-                   if re.search(r'Tipo dato:TARGA', bl, re.IGNORECASE):
-                       for l2 in block_lines[k+1:k+3]:
-                           m2 = re.search(r'Rif\.\s*testo:(\S+)', l2, re.IGNORECASE)
-                           if m2:
-                               targa = m2.group(1).strip()
-                               break
-                       break
-               # Prezzo totale: ultima riga con N1/NT e numero
-               prezzo_totale = ""
-               for bl in reversed(block_lines):
-                   if re.search(r'\bN[T1]\b', bl):
-                       nums = re.findall(r'[\d]+[.,][\d]+', bl)
-                       if nums:
-                           prezzo_totale = nums[-1].replace(',', '.')
-                       break
-               try:
-                   if prezzo_totale and abs(float(prezzo_totale)) == IMPORTO_BOLLO:
-                       i = j
-                       continue
-               except (ValueError, TypeError):
-                   pass
-               if descrizione or prezzo_totale:
-                   righe.append({
-                       "targa": targa,
-                       "telaio": telaio,
-                       "descrizione": descrizione,
-                       "prezzo_totale": prezzo_totale,
-                   })
-               i = j
-           else:
-               i += 1
+       # ── Parser Volkswagen basato sul testo reale ──
+       # Struttura: blocchi separati da "N1" o "N2" con prezzo
+       # Telaio dopo "Tipo dato:TELAIO\nRif. testo:XXXXX"
+       # Targa dopo "Tipo dato:TARGA\nRif. testo:XXXXX"
+       # Descrizione: "ADDEBITO PENALE PER DANNI" o simile
+       # Trova tutte le occorrenze di telaio e targa
+       telaio_pattern  = re.compile(r'Tipo dato:TELAIO\nRif\.\s*testo:(\S+)', re.IGNORECASE)
+       targa_pattern   = re.compile(r'Tipo dato:TARGA\nRif\.\s*testo:(\S+)', re.IGNORECASE)
+       # Prezzo: numero seguito da N1 o N2
+       prezzo_pattern  = re.compile(r'([\d]{1,3}(?:[.,]\d{3})*[.,]\d{2})\s*N[12T]', re.IGNORECASE)
+       # Descrizione: prima occorrenza di testo descrittivo prima di "Tipo dato"
+       desc_pattern    = re.compile(r'([A-Z][A-Z\s\-]+(?:DANNI|PENALE|PERIZIA|ESUBERO|FORFAIT|TAGLIANDO|PLAFOND)[A-Z\s\-]*)', re.IGNORECASE)
+       telai   = [m.group(1) for m in telaio_pattern.finditer(text)]
+       targhe  = [m.group(1) for m in targa_pattern.finditer(text)]
+       prezzi  = [m.group(1).replace('.','').replace(',','.') for m in prezzo_pattern.finditer(text)]
+       descs   = [m.group(1).strip() for m in desc_pattern.finditer(text)]
+       # Associa per indice
+       n = max(len(telai), len(targhe), len(prezzi))
+       for idx in range(n):
+           telaio       = telai[idx]  if idx < len(telai)  else ""
+           targa        = targhe[idx] if idx < len(targhe) else ""
+           prezzo_totale = prezzi[idx] if idx < len(prezzi) else ""
+           descrizione  = descs[idx]  if idx < len(descs)  else ""
+           try:
+               if prezzo_totale and abs(float(prezzo_totale)) == IMPORTO_BOLLO:
+                   continue
+           except (ValueError, TypeError):
+               pass
+           if telaio or prezzo_totale:
+               righe.append({
+                   "targa": targa,
+                   "telaio": telaio,
+                   "descrizione": descrizione,
+                   "prezzo_totale": prezzo_totale,
+               })
    elif is_psa_format:
        row_start_re = re.compile(r'^\s*(\d+)\s*$')
        desc_re = re.compile(r'([A-Z0-9]{8,})\s+(RMK\S+)\s+(.*)', re.IGNORECASE)
