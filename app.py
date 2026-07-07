@@ -121,17 +121,26 @@ def parse_pdf_fattura(pdf_bytes):
                break
    # Numero documento
    numero_documento = ""
-   m = re.search(r'NUMERO\s+DOCUMENTO\s*[\n\r]+\s*(\S+)', text, re.IGNORECASE)
+   # Formato VW: "NUMERO DOCUMENTO ART. 73\n000866019" oppure "NUMERO DOCUMENTO\nART. 73\n000866019"
+   m = re.search(r'NUMERO\s+DOCUMENTO(?:\s+ART[.\s]+\d+)?\s*[\n\r]+\s*(?:ART[.\s]+\d+\s*[\n\r]+\s*)?(\d{6,})', text, re.IGNORECASE)
    if m:
        numero_documento = m.group(1).strip()
    else:
+       # Formato PSA: "NUMERO DOCUMENTO\n1181358498"
+       m = re.search(r'NUMERO\s+DOCUMENTO\s*[\n\r]+\s*(\S+)', text, re.IGNORECASE)
+       if m:
+           val = m.group(1).strip()
+           if val.upper() not in ('ART', 'ART.'):
+               numero_documento = val
+   if not numero_documento:
+       # Formato Romana Diesel: "Numero\nG000617"
        m = re.search(r'numero\s*[\n\r]+\s*([A-Z0-9]+)', text, re.IGNORECASE)
        if m:
            numero_documento = m.group(1).strip()
-       else:
-           m = re.search(r'numero\s+(\S+)', text, re.IGNORECASE)
-           if m:
-               numero_documento = m.group(1).strip()
+   if not numero_documento:
+       m = re.search(r'numero\s+(\S+)', text, re.IGNORECASE)
+       if m:
+           numero_documento = m.group(1).strip()
    # Data documento
    data_documento = ""
    m = re.search(r'DATA\s+DOCUMENTO\s*[\n\r\s]+(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})', text, re.IGNORECASE)
@@ -158,8 +167,9 @@ def parse_pdf_fattura(pdf_bytes):
        # Trova tutte le occorrenze di telaio e targa
        telaio_pattern  = re.compile(r'Tipo dato:TELAIO\nRif\.\s*testo:(\S+)', re.IGNORECASE)
        targa_pattern   = re.compile(r'Tipo dato:TARGA\nRif\.\s*testo:(\S+)', re.IGNORECASE)
-       # Prezzo: numero seguito da N1 o N2
-       prezzo_pattern  = re.compile(r'([\d]{1,3}(?:[.,]\d{3})*[.,]\d{2})\s*N[12T]', re.IGNORECASE)
+       # Prezzo: cerca pattern "NUMBER N1 NUMBER" dove il secondo è il prezzo totale
+       # es: "202,98 N1 202,98" oppure "20252 142,00 N1 142,00"
+       prezzo_pattern  = re.compile(r'[\d,.]+ N[12T] ([\d]{1,3}(?:[.,]\d{3})*[.,]\d{2})', re.IGNORECASE)
        # Descrizione: prima occorrenza di testo descrittivo prima di "Tipo dato"
        desc_pattern    = re.compile(r'([A-Z][A-Z\s\-]+(?:DANNI|PENALE|PERIZIA|ESUBERO|FORFAIT|TAGLIANDO|PLAFOND)[A-Z\s\-]*)', re.IGNORECASE)
        telai   = [m.group(1) for m in telaio_pattern.finditer(text)]
