@@ -121,24 +121,29 @@ def parse_pdf_fattura(pdf_bytes):
                break
    # Numero documento
    numero_documento = ""
-   # Formato VW: "NUMERO DOCUMENTO ART. 73\n000866019" oppure "NUMERO DOCUMENTO\nART. 73\n000866019"
-   m = re.search(r'NUMERO\s+DOCUMENTO(?:\s+ART[.\s]+\d+)?\s*[\n\r]+\s*(?:ART[.\s]+\d+\s*[\n\r]+\s*)?(\d{6,})', text, re.IGNORECASE)
+   # Formato VW: "TD01 (fattura) 000866019 16980504532 30-03-2026"
+   m = re.search(r'TD0\d\s*\([^)]+\)\s*(\d{6,})', text, re.IGNORECASE)
    if m:
        numero_documento = m.group(1).strip()
    else:
+       # Formato VW alternativo: "NUMERO DOCUMENTO ART. 73 NUMERO DOCUMENTO\n...000866019"
+       m = re.search(r'NUMERO\s+DOCUMENTO(?:\s+ART[.\s]+\d+)?\s*[\n\r]+\s*(?:ART[.\s]+\d+\s*[\n\r]+\s*)?(\d{6,})', text, re.IGNORECASE)
+       if m:
+           numero_documento = m.group(1).strip()
+   if not numero_documento:
        # Formato PSA: "NUMERO DOCUMENTO\n1181358498"
        m = re.search(r'NUMERO\s+DOCUMENTO\s*[\n\r]+\s*(\S+)', text, re.IGNORECASE)
        if m:
            val = m.group(1).strip()
-           if val.upper() not in ('ART', 'ART.'):
+           if not re.match(r'^[A-Z]+$', val, re.IGNORECASE):
                numero_documento = val
    if not numero_documento:
        # Formato Romana Diesel: "Numero\nG000617"
-       m = re.search(r'numero\s*[\n\r]+\s*([A-Z0-9]+)', text, re.IGNORECASE)
+       m = re.search(r'\bNumero\b\s*[\n\r]+\s*([A-Z0-9]+)', text, re.IGNORECASE)
        if m:
            numero_documento = m.group(1).strip()
    if not numero_documento:
-       m = re.search(r'numero\s+(\S+)', text, re.IGNORECASE)
+       m = re.search(r'\bNumero\b\s+([A-Z0-9]{4,})', text, re.IGNORECASE)
        if m:
            numero_documento = m.group(1).strip()
    # Data documento
@@ -159,40 +164,82 @@ def parse_pdf_fattura(pdf_bytes):
    is_vw_format      = bool(re.search(r'Tipo dato:TELAIO', text, re.IGNORECASE))
    righe = []
    if is_vw_format:
-       # ── Parser Volkswagen basato sul testo reale ──
-       # Struttura: blocchi separati da "N1" o "N2" con prezzo
-       # Telaio dopo "Tipo dato:TELAIO\nRif. testo:XXXXX"
-       # Targa dopo "Tipo dato:TARGA\nRif. testo:XXXXX"
-       # Descrizione: "ADDEBITO PENALE PER DANNI" o simile
-       # Trova tutte le occorrenze di telaio e targa
-       telaio_pattern  = re.compile(r'Tipo dato:TELAIO\nRif\.\s*testo:(\S+)', re.IGNORECASE)
-       targa_pattern   = re.compile(r'Tipo dato:TARGA\nRif\.\s*testo:(\S+)', re.IGNORECASE)
-       # Prezzo: cerca pattern "NUMBER N1 NUMBER" dove il secondo è il prezzo totale
-       # es: "202,98 N1 202,98" oppure "20252 142,00 N1 142,00"
-       prezzo_pattern  = re.compile(r'[\d,.]+ N[12T] ([\d]{1,3}(?:[.,]\d{3})*[.,]\d{2})', re.IGNORECASE)
-       # Descrizione: prima occorrenza di testo descrittivo prima di "Tipo dato"
-       desc_pattern    = re.compile(r'([A-Z][A-Z\s\-]+(?:DANNI|PENALE|PERIZIA|ESUBERO|FORFAIT|TAGLIANDO|PLAFOND)[A-Z\s\-]*)', re.IGNORECASE)
-       telai   = [m.group(1) for m in telaio_pattern.finditer(text)]
-       targhe  = [m.group(1) for m in targa_pattern.finditer(text)]
-       prezzi  = [m.group(1).replace('.','').replace(',','.') for m in prezzo_pattern.finditer(text)]
-       descs   = [m.group(1).strip() for m in desc_pattern.finditer(text)]
-       # Associa per indice
-       n = max(len(telai), len(targhe), len(prezzi))
-       for idx in range(n):
-           telaio       = telai[idx]  if idx < len(telai)  else ""
-           targa        = targhe[idx] if idx < len(targhe) else ""
-           prezzo_totale = prezzi[idx] if idx < len(prezzi) else ""
-           descrizione  = descs[idx]  if idx < len(descs)  else ""
-           try:
-               if prezzo_totale and abs(float(prezzo_totale)) == IMPORTO_BOLLO:
-                   continue
-           except (ValueError, TypeError):
-               pass
-           if telaio or prezzo_totale:
+       # ── Parser Volkswagen ──
+       # Estrae telaio, targa, prezzi e descrizioni dal testo
+       telaio_pattern = re.compile(r'Tipo\s+dato:TELAIO[\n\r]+Rif\.\s*testo:(\S+)', re.IGNORECASE)
+       targa_pattern  = re.compile(r'Tipo\s+dato:TARGA[\n\r]+Rif\.\s*testo:(\S+)', re.IGNORECASE)
+       prezzo_pattern = re.compile(r'[\d,.]+ N[12T] ([\d]{1,3}(?:[.,]\d{3})*[.,]\d{2})', re.IGNORECASE)
+       desc_pattern   = re.compile(r'([A-Z][A-Z\s\-]+(?:DANNI|PENALE|PERIZIA|ESUBERO|FORFAIT|TAGLIANDO|PLAFOND)[A-Z\s\-]*)', re.IGNORECASE)
+       telai  = [m.group(1) for m in telaio_pattern.finditer(text)]
+       targhe = [m.group(1) for m in targa_pattern.finditer(text)]
+       prezzi = [m.group(1).replace('.','').replace(',','.') for m in prezzo_pattern.finditer(text)]
+       descs  = [m.group(1).strip() for m in desc_pattern.finditer(text)]
+       # Abbina targa e telaio per indice.
+       # Se il numero di telai == numero di targhe == numero di prezzi → abbinamento diretto.
+       # Se telai e targhe hanno conteggi diversi (pagina a capo), abbina per prezzo uguale.
+       n_prezzi = len(prezzi)
+       if len(telai) == len(targhe) == n_prezzi:
+           # Caso standard: tutto allineato
+           for idx in range(n_prezzi):
+               prezzo_totale = prezzi[idx]
+               try:
+                   if abs(float(prezzo_totale)) == IMPORTO_BOLLO:
+                       continue
+               except (ValueError, TypeError):
+                   pass
                righe.append({
-                   "targa": targa,
-                   "telaio": telaio,
-                   "descrizione": descrizione,
+                   "targa":         targhe[idx] if idx < len(targhe) else "",
+                   "telaio":        telai[idx]  if idx < len(telai)  else "",
+                   "descrizione":   descs[idx]  if idx < len(descs)  else "",
+                   "prezzo_totale": prezzo_totale,
+               })
+       else:
+           # Caso pagina a capo: abbina per posizione nel testo
+           # Costruisci lista di occorrenze con posizione nel testo
+           telaio_matches = [(m.group(1), m.start()) for m in telaio_pattern.finditer(text)]
+           targa_matches  = [(m.group(1), m.start()) for m in targa_pattern.finditer(text)]
+           prezzo_matches = [(m.group(1).replace('.','').replace(',','.'), m.start()) for m in prezzo_pattern.finditer(text)]
+           desc_matches   = [(m.group(1).strip(), m.start()) for m in desc_pattern.finditer(text)]
+           for p_idx, (prezzo_totale, p_pos) in enumerate(prezzo_matches):
+               try:
+                   if abs(float(prezzo_totale)) == IMPORTO_BOLLO:
+                       continue
+               except (ValueError, TypeError):
+                   pass
+               # Trova il telaio più vicino prima del prezzo
+               telaio = ""
+               for t_val, t_pos in reversed(telaio_matches):
+                   if t_pos < p_pos:
+                       telaio = t_val
+                       break
+               # Trova la targa più vicina prima del prezzo
+               targa = ""
+               for tg_val, tg_pos in reversed(targa_matches):
+                   if tg_pos < p_pos:
+                       targa = tg_val
+                       break
+               # Se targa o telaio mancano, cerca nell'intero blocco
+               # (potrebbero essere su pagina successiva con stesso importo)
+               if not targa and not telaio:
+                   # cerca dopo il prezzo
+                   for tg_val, tg_pos in targa_matches:
+                       if tg_pos > p_pos:
+                           targa = tg_val
+                           break
+                   for t_val, t_pos in telaio_matches:
+                       if t_pos > p_pos:
+                           telaio = t_val
+                           break
+               # Descrizione più vicina prima del prezzo
+               descrizione = ""
+               for d_val, d_pos in reversed(desc_matches):
+                   if d_pos < p_pos:
+                       descrizione = d_val
+                       break
+               righe.append({
+                   "targa":         targa,
+                   "telaio":        telaio,
+                   "descrizione":   descrizione,
                    "prezzo_totale": prezzo_totale,
                })
    elif is_psa_format:
