@@ -165,61 +165,56 @@ def parse_pdf_fattura(pdf_bytes):
    righe = []
    if is_vw_format:
        # ── Parser Volkswagen ──
-       # Estrae telaio, targa, prezzi e descrizioni dal testo
-       telaio_pattern = re.compile(r'Tipo\s+dato:TELAIO[\n\r]+Rif\.\s*testo:(\S+)', re.IGNORECASE)
-       targa_pattern  = re.compile(r'Tipo\s+dato:TARGA[\n\r]+Rif\.\s*testo:(\S+)', re.IGNORECASE)
-       prezzo_pattern = re.compile(r'[\d,.]+ N[12T] ([\d]{1,3}(?:[.,]\d{3})*[.,]\d{2})', re.IGNORECASE)
-       desc_pattern   = re.compile(r'([A-Z][A-Z\s\-]+(?:DANNI|PENALE|PERIZIA|ESUBERO|FORFAIT|TAGLIANDO|PLAFOND)[A-Z\s\-]*)', re.IGNORECASE)
-       telai  = [m.group(1) for m in telaio_pattern.finditer(text)]
-       targhe = [m.group(1) for m in targa_pattern.finditer(text)]
-       prezzi = [m.group(1).replace('.','').replace(',','.') for m in prezzo_pattern.finditer(text)]
-       descs  = [m.group(1).strip() for m in desc_pattern.finditer(text)]
-       # Abbina targa e telaio per indice.
-       # Parser basato su posizione nel testo — gestisce pagina a capo
-       # Ogni blocco è: N. riga → ADDEBITO... → Tipo dato:TELAIO → Rif. testo:XXX → Tipo dato:TARGA → Rif. testo:XXX → prezzo N1 prezzo
-       # Anche quando il prezzo finisce sulla pagina successiva
-       telaio_matches = [(m.group(1), m.start()) for m in telaio_pattern.finditer(text)]
-       targa_matches  = [(m.group(1), m.start()) for m in targa_pattern.finditer(text)]
-       prezzo_matches = [(m.group(1).replace('.','').replace(',','.'), m.start()) for m in prezzo_pattern.finditer(text)]
-       desc_matches   = [(m.group(1).strip(), m.start()) for m in desc_pattern.finditer(text)]
-       # Costruisci blocchi basati sui telai (uno per riga fattura)
-       for t_idx, (telaio_val, t_pos) in enumerate(telaio_matches):
-           # Prossima posizione di telaio (per delimitare il blocco)
-           next_t_pos = telaio_matches[t_idx + 1][1] if t_idx + 1 < len(telaio_matches) else len(text)
-           # Targa: cerca dopo il telaio corrente e prima del prossimo telaio
-           targa_val = ""
-           for tg_val, tg_pos in targa_matches:
-               if t_pos < tg_pos < next_t_pos:
-                   targa_val = tg_val
+       # Struttura blocco: \n{N}\n {descrizione riga1}\n{descrizione riga2 se va a capo}\n
+       # Tipo dato:TELAIO\nRif. testo:{telaio}\nTipo dato:TARGA\nRif. testo:{targa}\n
+       # ... altri Tipo dato ...\n{prezzo}\nN1\n{prezzo}\n
+       blocco_pattern = re.compile(r'\n(\d+)\n', re.MULTILINE)
+       blocchi = [(m.group(1), m.start(), m.end()) for m in blocco_pattern.finditer(text)]
+       for b_idx, (nr, b_start, b_end) in enumerate(blocchi):
+           fine = blocchi[b_idx + 1][1] if b_idx + 1 < len(blocchi) else len(text)
+           blocco_text = text[b_end:fine]
+           # Descrizione: raccoglie tutte le righe di testo PRIMA del primo "Tipo dato:"
+           # gestisce il caso in cui la descrizione va a capo pagina
+           desc_lines = []
+           for riga in blocco_text.split('\n'):
+               riga = riga.strip()
+               if not riga:
+                   continue
+               if re.match(r'Tipo\s*dato:', riga, re.IGNORECASE):
                    break
-           # Prezzo: cerca dopo il telaio corrente, anche oltre il prossimo telaio (pagina a capo)
-           # ma prima del telaio successivo + 2000 caratteri
+               if re.match(r'Rif\.\s*testo:', riga, re.IGNORECASE):
+                   break
+               if re.match(r'N\.\s+COD\.ARTICOLO', riga, re.IGNORECASE):
+                   break
+               desc_lines.append(riga)
+           # Unisci le righe della descrizione e rimuovi il trattino finale
+           desc_val = ' '.join(desc_lines).strip()
+           desc_val = re.sub(r'\s*-\s*$', '', desc_val).strip()
+           # Telaio
+           m_telaio = re.search(r'Tipo\s*dato:TELAIO\s*\nRif\.\s*testo:(\S+)', blocco_text, re.IGNORECASE)
+           telaio_val = m_telaio.group(1).strip() if m_telaio else ""
+           # Targa
+           m_targa = re.search(r'Tipo\s*dato:TARGA\s*\nRif\.\s*testo:(\S+)', blocco_text, re.IGNORECASE)
+           targa_val = m_targa.group(1).strip() if m_targa else ""
+           # Prezzo: "numero N1 numero" — prende il secondo numero
+           m_prezzo = re.search(r'[\d,.]+\s+N[12T]\s+([\d]{1,3}(?:[.,]\d{3})*[.,]\d{2})', blocco_text, re.IGNORECASE)
            prezzo_val = ""
-           search_end = next_t_pos + 2000
-           for p_val, p_pos in prezzo_matches:
-               if t_pos < p_pos < search_end:
-                   try:
-                       if abs(float(p_val)) != IMPORTO_BOLLO:
-                           prezzo_val = p_val
-                           break
-                   except (ValueError, TypeError):
-                       pass
-           # Descrizione: cerca prima del telaio corrente (nella stessa riga)
-           desc_val = ""
-           for d_val, d_pos in reversed(desc_matches):
-               if d_pos < t_pos:
-                   desc_val = d_val
-                   break
-           # Pulisci descrizione: prendi solo la parte prima del trattino
-           if desc_val and '-' in desc_val:
-               desc_val = desc_val.split('-')[0].strip()
-           if telaio_val or prezzo_val:
-               righe.append({
-                   "targa":         targa_val,
-                   "telaio":        telaio_val,
-                   "descrizione":   desc_val,
-                   "prezzo_totale": prezzo_val,
-               })
+           if m_prezzo:
+               prezzo_val = m_prezzo.group(1).replace('.','').replace(',','.')
+           # Salta bollo
+           try:
+               if prezzo_val and abs(float(prezzo_val)) == IMPORTO_BOLLO:
+                   continue
+           except (ValueError, TypeError):
+               pass
+           if not prezzo_val:
+               continue
+           righe.append({
+               "targa":         targa_val,
+               "telaio":        telaio_val,
+               "descrizione":   desc_val,
+               "prezzo_totale": prezzo_val,
+           })
    elif is_psa_format:
        row_start_re = re.compile(r'^\s*(\d+)\s*$')
        desc_re = re.compile(r'([A-Z0-9]{8,})\s+(RMK\S+)\s+(.*)', re.IGNORECASE)
