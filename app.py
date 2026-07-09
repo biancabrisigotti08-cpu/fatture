@@ -187,7 +187,16 @@ def parse_pdf_fattura(pdf_bytes):
                    break
                desc_lines.append(riga)
            desc_val = ' '.join(desc_lines).strip()
-           desc_val = re.sub(r'\s*-\s*$', '', desc_val).strip()
+           # Riconosci solo le 3 descrizioni valide
+           desc_val_upper = desc_val.upper()
+           if 'ELEMENTI TECNICI' in desc_val_upper:
+               desc_val = 'Addebito Penale per Elementi Tecnici Mancanti'
+           elif 'ECCEDENZA' in desc_val_upper or 'CHILOMETRICA' in desc_val_upper:
+               desc_val = 'Addebito Penale per Eccedenza Chilometrica'
+           elif 'DANNI' in desc_val_upper:
+               desc_val = 'Addebito Penale per Danni'
+           else:
+               desc_val = desc_val.split('-')[0].strip()
            # Telaio: cerca "Tipo dato:TELAIO\nRif. testo:XXX"
            m_telaio = re.search(r'Tipo\s*dato:TELAIO\s*\nRif\.\s*testo:(\S+)', blocco_text, re.IGNORECASE)
            telaio_val = m_telaio.group(1).strip() if m_telaio else ""
