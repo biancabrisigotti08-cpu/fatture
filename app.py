@@ -329,29 +329,41 @@ def parse_pdf_fattura(pdf_bytes):
 
         # ── Parser Volkswagen ──
 
-        # Struttura blocco: \n{N}\n {descrizione riga1}\n{descrizione riga2 se va a capo}\n
+        # pypdf può estrarre il testo con \n reali o con spazi — gestiamo entrambi.
 
-        # Tipo dato:TELAIO\nRif. testo:{telaio}\nTipo dato:TARGA\nRif. testo:{targa}\n
+        # Normalizziamo prima il testo: "Tipo dato:" su riga propria
 
-        # ... altri Tipo dato ...\n{prezzo}\nN1\n{prezzo}\n
+        # Normalizza separatori: inserisci \n prima di "Tipo dato:" e "Rif. testo:"
 
-        blocco_pattern = re.compile(r'\n(\d+)\n', re.MULTILINE)
+        text_norm = re.sub(r'\s*(Tipo\s+dato:)', r'\n\1', text, flags=re.IGNORECASE)
 
-        blocchi = [(m.group(1), m.start(), m.end()) for m in blocco_pattern.finditer(text)]
+        text_norm = re.sub(r'\s*(Rif\.\s*testo:)', r'\n\1', text_norm, flags=re.IGNORECASE)
 
-        for b_idx, (nr, b_start, b_end) in enumerate(blocchi):
+        text_norm = re.sub(r'\s*(Rif\.\s*data:)', r'\n\1', text_norm, flags=re.IGNORECASE)
 
-            fine = blocchi[b_idx + 1][1] if b_idx + 1 < len(blocchi) else len(text)
+        # Normalizza N1/N2 con prezzo
 
-            blocco_text = text[b_end:fine]
+        text_norm = re.sub(r'\s+(N[12T])\s+', r'\n\1 ', text_norm, flags=re.IGNORECASE)
 
-            # Descrizione: raccoglie tutte le righe di testo PRIMA del primo "Tipo dato:"
+        # Dividi in blocchi usando "ADDEBITO PENALE PER" come separatore
 
-            # gestisce il caso in cui la descrizione va a capo pagina
+        blocchi_raw = re.split(r'(?=ADDEBITO\s+PENALE\s+PER)', text_norm, flags=re.IGNORECASE)
+
+        for blocco_text in blocchi_raw:
+
+            blocco_text = blocco_text.strip()
+
+            if not blocco_text or not re.match(r'ADDEBITO', blocco_text, re.IGNORECASE):
+
+                continue
+
+            righe_blocco = blocco_text.split('\n')
+
+            # Descrizione: righe iniziali fino al primo "Tipo dato:"
 
             desc_lines = []
 
-            for riga in blocco_text.split('\n'):
+            for riga in righe_blocco:
 
                 riga = riga.strip()
 
@@ -363,7 +375,7 @@ def parse_pdf_fattura(pdf_bytes):
 
                     break
 
-                if re.match(r'Rif\.\s*testo:', riga, re.IGNORECASE):
+                if re.match(r'Rif\.\s*(testo|data):', riga, re.IGNORECASE):
 
                     break
 
@@ -372,8 +384,6 @@ def parse_pdf_fattura(pdf_bytes):
                     break
 
                 desc_lines.append(riga)
-
-            # Unisci le righe della descrizione e rimuovi il trattino finale
 
             desc_val = ' '.join(desc_lines).strip()
 
@@ -391,7 +401,7 @@ def parse_pdf_fattura(pdf_bytes):
 
             targa_val = m_targa.group(1).strip() if m_targa else ""
 
-            # Prezzo: "numero N1 numero" — prende il secondo numero
+            # Prezzo: "numero N1 numero"
 
             m_prezzo = re.search(r'[\d,.]+\s+N[12T]\s+([\d]{1,3}(?:[.,]\d{3})*[.,]\d{2})', blocco_text, re.IGNORECASE)
 
@@ -399,9 +409,7 @@ def parse_pdf_fattura(pdf_bytes):
 
             if m_prezzo:
 
-                prezzo_val = m_prezzo.group(1).replace('.','').replace(',','.')
-
-            # Salta bollo
+                prezzo_val = m_prezzo.group(1).replace('.', '').replace(',', '.')
 
             try:
 
