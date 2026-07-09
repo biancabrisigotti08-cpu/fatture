@@ -175,72 +175,50 @@ def parse_pdf_fattura(pdf_bytes):
        prezzi = [m.group(1).replace('.','').replace(',','.') for m in prezzo_pattern.finditer(text)]
        descs  = [m.group(1).strip() for m in desc_pattern.finditer(text)]
        # Abbina targa e telaio per indice.
-       # Se il numero di telai == numero di targhe == numero di prezzi → abbinamento diretto.
-       # Se telai e targhe hanno conteggi diversi (pagina a capo), abbina per prezzo uguale.
-       n_prezzi = len(prezzi)
-       if len(telai) == len(targhe) == n_prezzi:
-           # Caso standard: tutto allineato
-           for idx in range(n_prezzi):
-               prezzo_totale = prezzi[idx]
-               try:
-                   if abs(float(prezzo_totale)) == IMPORTO_BOLLO:
-                       continue
-               except (ValueError, TypeError):
-                   pass
-               righe.append({
-                   "targa":         targhe[idx] if idx < len(targhe) else "",
-                   "telaio":        telai[idx]  if idx < len(telai)  else "",
-                   "descrizione":   descs[idx]  if idx < len(descs)  else "",
-                   "prezzo_totale": prezzo_totale,
-               })
-       else:
-           # Caso pagina a capo: abbina per posizione nel testo
-           # Costruisci lista di occorrenze con posizione nel testo
-           telaio_matches = [(m.group(1), m.start()) for m in telaio_pattern.finditer(text)]
-           targa_matches  = [(m.group(1), m.start()) for m in targa_pattern.finditer(text)]
-           prezzo_matches = [(m.group(1).replace('.','').replace(',','.'), m.start()) for m in prezzo_pattern.finditer(text)]
-           desc_matches   = [(m.group(1).strip(), m.start()) for m in desc_pattern.finditer(text)]
-           for p_idx, (prezzo_totale, p_pos) in enumerate(prezzo_matches):
-               try:
-                   if abs(float(prezzo_totale)) == IMPORTO_BOLLO:
-                       continue
-               except (ValueError, TypeError):
-                   pass
-               # Trova il telaio più vicino prima del prezzo
-               telaio = ""
-               for t_val, t_pos in reversed(telaio_matches):
-                   if t_pos < p_pos:
-                       telaio = t_val
-                       break
-               # Trova la targa più vicina prima del prezzo
-               targa = ""
-               for tg_val, tg_pos in reversed(targa_matches):
-                   if tg_pos < p_pos:
-                       targa = tg_val
-                       break
-               # Se targa o telaio mancano, cerca nell'intero blocco
-               # (potrebbero essere su pagina successiva con stesso importo)
-               if not targa and not telaio:
-                   # cerca dopo il prezzo
-                   for tg_val, tg_pos in targa_matches:
-                       if tg_pos > p_pos:
-                           targa = tg_val
+       # Parser basato su posizione nel testo — gestisce pagina a capo
+       # Ogni blocco è: N. riga → ADDEBITO... → Tipo dato:TELAIO → Rif. testo:XXX → Tipo dato:TARGA → Rif. testo:XXX → prezzo N1 prezzo
+       # Anche quando il prezzo finisce sulla pagina successiva
+       telaio_matches = [(m.group(1), m.start()) for m in telaio_pattern.finditer(text)]
+       targa_matches  = [(m.group(1), m.start()) for m in targa_pattern.finditer(text)]
+       prezzo_matches = [(m.group(1).replace('.','').replace(',','.'), m.start()) for m in prezzo_pattern.finditer(text)]
+       desc_matches   = [(m.group(1).strip(), m.start()) for m in desc_pattern.finditer(text)]
+       # Costruisci blocchi basati sui telai (uno per riga fattura)
+       for t_idx, (telaio_val, t_pos) in enumerate(telaio_matches):
+           # Prossima posizione di telaio (per delimitare il blocco)
+           next_t_pos = telaio_matches[t_idx + 1][1] if t_idx + 1 < len(telaio_matches) else len(text)
+           # Targa: cerca dopo il telaio corrente e prima del prossimo telaio
+           targa_val = ""
+           for tg_val, tg_pos in targa_matches:
+               if t_pos < tg_pos < next_t_pos:
+                   targa_val = tg_val
+                   break
+           # Prezzo: cerca dopo il telaio corrente, anche oltre il prossimo telaio (pagina a capo)
+           # ma prima del telaio successivo + 2000 caratteri
+           prezzo_val = ""
+           search_end = next_t_pos + 2000
+           for p_val, p_pos in prezzo_matches:
+               if t_pos < p_pos < search_end:
+                   try:
+                       if abs(float(p_val)) != IMPORTO_BOLLO:
+                           prezzo_val = p_val
                            break
-                   for t_val, t_pos in telaio_matches:
-                       if t_pos > p_pos:
-                           telaio = t_val
-                           break
-               # Descrizione più vicina prima del prezzo
-               descrizione = ""
-               for d_val, d_pos in reversed(desc_matches):
-                   if d_pos < p_pos:
-                       descrizione = d_val
-                       break
+                   except (ValueError, TypeError):
+                       pass
+           # Descrizione: cerca prima del telaio corrente (nella stessa riga)
+           desc_val = ""
+           for d_val, d_pos in reversed(desc_matches):
+               if d_pos < t_pos:
+                   desc_val = d_val
+                   break
+           # Pulisci descrizione: prendi solo la parte prima del trattino
+           if desc_val and '-' in desc_val:
+               desc_val = desc_val.split('-')[0].strip()
+           if telaio_val or prezzo_val:
                righe.append({
-                   "targa":         targa,
-                   "telaio":        telaio,
-                   "descrizione":   descrizione,
-                   "prezzo_totale": prezzo_totale,
+                   "targa":         targa_val,
+                   "telaio":        telaio_val,
+                   "descrizione":   desc_val,
+                   "prezzo_totale": prezzo_val,
                })
    elif is_psa_format:
        row_start_re = re.compile(r'^\s*(\d+)\s*$')
