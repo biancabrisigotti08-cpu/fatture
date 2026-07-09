@@ -164,25 +164,18 @@ def parse_pdf_fattura(pdf_bytes):
    is_vw_format      = bool(re.search(r'Tipo dato:TELAIO', text, re.IGNORECASE))
    righe = []
    if is_vw_format:
-       # ── Parser Volkswagen ──
-       # pypdf può estrarre il testo con \n reali o con spazi — gestiamo entrambi.
-       # Normalizziamo prima il testo: "Tipo dato:" su riga propria
-       # Normalizza separatori: inserisci \n prima di "Tipo dato:" e "Rif. testo:"
-       text_norm = re.sub(r'\s*(Tipo\s+dato:)', r'\n\1', text, flags=re.IGNORECASE)
-       text_norm = re.sub(r'\s*(Rif\.\s*testo:)', r'\n\1', text_norm, flags=re.IGNORECASE)
-       text_norm = re.sub(r'\s*(Rif\.\s*data:)', r'\n\1', text_norm, flags=re.IGNORECASE)
-       # Normalizza N1/N2 con prezzo
-       text_norm = re.sub(r'\s+(N[12T])\s+', r'\n\1 ', text_norm, flags=re.IGNORECASE)
+       # ── Parser Volkswagen v4 ──
+       # Struttura blocco reale (da log):
+       # "ADDEBITO PENALE PER DANNI -\nTipo dato:TELAIO\nRif. testo:XXX\nTipo dato:TARGA\nRif. testo:XXX\n...202,98 N1 202,98\n"
        # Dividi in blocchi usando "ADDEBITO PENALE PER" come separatore
-       blocchi_raw = re.split(r'(?=ADDEBITO\s+PENALE\s+PER)', text_norm, flags=re.IGNORECASE)
+       blocchi_raw = re.split(r'(?=ADDEBITO\s+PENALE\s+PER)', text, flags=re.IGNORECASE)
        for blocco_text in blocchi_raw:
            blocco_text = blocco_text.strip()
            if not blocco_text or not re.match(r'ADDEBITO', blocco_text, re.IGNORECASE):
                continue
-           righe_blocco = blocco_text.split('\n')
            # Descrizione: righe iniziali fino al primo "Tipo dato:"
            desc_lines = []
-           for riga in righe_blocco:
+           for riga in blocco_text.split('\n'):
                riga = riga.strip()
                if not riga:
                    continue
@@ -195,13 +188,13 @@ def parse_pdf_fattura(pdf_bytes):
                desc_lines.append(riga)
            desc_val = ' '.join(desc_lines).strip()
            desc_val = re.sub(r'\s*-\s*$', '', desc_val).strip()
-           # Telaio
+           # Telaio: cerca "Tipo dato:TELAIO\nRif. testo:XXX"
            m_telaio = re.search(r'Tipo\s*dato:TELAIO\s*\nRif\.\s*testo:(\S+)', blocco_text, re.IGNORECASE)
            telaio_val = m_telaio.group(1).strip() if m_telaio else ""
-           # Targa
+           # Targa: cerca "Tipo dato:TARGA\nRif. testo:XXX"
            m_targa = re.search(r'Tipo\s*dato:TARGA\s*\nRif\.\s*testo:(\S+)', blocco_text, re.IGNORECASE)
            targa_val = m_targa.group(1).strip() if m_targa else ""
-           # Prezzo: "numero N1 numero"
+           # Prezzo: "numero N1 numero" — prende il secondo numero
            m_prezzo = re.search(r'[\d,.]+\s+N[12T]\s+([\d]{1,3}(?:[.,]\d{3})*[.,]\d{2})', blocco_text, re.IGNORECASE)
            prezzo_val = ""
            if m_prezzo:
