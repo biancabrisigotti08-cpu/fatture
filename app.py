@@ -308,8 +308,39 @@ def parse_pdf_fattura(pdf_bytes):
    return {"cedente": cedente, "cessionario": cessionario,
            "numero_documento": numero_documento, "data_documento": data_documento, "righe": righe}
 
+def extract_xml_from_pdf(pdf_bytes: bytes):
+   """Tenta di estrarre un XML FatturaPA allegato dentro il PDF."""
+   try:
+       from pypdf import PdfReader
+       reader = PdfReader(io.BytesIO(pdf_bytes))
+       # Cerca allegati nel PDF
+       if '/Names' in reader.trailer['/Root']:
+           names = reader.trailer['/Root']['/Names']
+           if '/EmbeddedFiles' in names:
+               ef = names['/EmbeddedFiles']
+               if '/Names' in ef:
+                   files = ef['/Names']
+                   for i in range(0, len(files), 2):
+                       name = str(files[i])
+                       filespec = files[i+1].get_object()
+                       if '/EF' in filespec:
+                           ef_stream = filespec['/EF']['/F'].get_object()
+                           data = ef_stream.get_data()
+                           if b'FatturaElettronica' in data or b'<?xml' in data:
+                               return data
+   except Exception as e:
+       print(f"Nessun XML allegato trovato nel PDF: {e}")
+   return None
+
 def process_pdf_bytes(pdf_bytes, all_rows):
    try:
+       # Prima prova a estrarre XML allegato dentro il PDF
+       xml_data = extract_xml_from_pdf(pdf_bytes)
+       if xml_data:
+           print("XML trovato dentro il PDF - uso parser XML")
+           return process_xml_bytes(xml_data, all_rows)
+       print("Nessun XML allegato - uso parser PDF")
+
        # Log testo grezzo per debug
        text_preview = ""
        reader = PdfReader(io.BytesIO(pdf_bytes))
