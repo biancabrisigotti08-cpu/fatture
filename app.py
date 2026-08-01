@@ -164,50 +164,84 @@ def parse_pdf_fattura(pdf_bytes):
    is_vw_format      = bool(re.search(r'Tipo dato:TELAIO', text, re.IGNORECASE))
    righe = []
    if is_vw_format:
-       # ── Parser Volkswagen v4 ──
-       # Struttura blocco reale (da log):
-       # "ADDEBITO PENALE PER DANNI -\nTipo dato:TELAIO\nRif. testo:XXX\nTipo dato:TARGA\nRif. testo:XXX\n...202,98 N1 202,98\n"
-       # Dividi in blocchi usando "ADDEBITO PENALE PER" come separatore
-       blocchi_raw = re.split(r'(?=ADDEBITO\s+PENALE\s+PER)', text, flags=re.IGNORECASE)
-       for blocco_text in blocchi_raw:
-           blocco_text = blocco_text.strip()
-           if not blocco_text or not re.match(r'ADDEBITO', blocco_text, re.IGNORECASE):
-               continue
-           # Descrizione: righe iniziali fino al primo "Tipo dato:"
-           desc_lines = []
-           for riga in blocco_text.split('\n'):
-               riga = riga.strip()
-               if not riga:
-                   continue
-               if re.match(r'Tipo\s*dato:', riga, re.IGNORECASE):
-                   break
-               if re.match(r'Rif\.\s*(testo|data):', riga, re.IGNORECASE):
-                   break
-               if re.match(r'N\.\s+COD\.ARTICOLO', riga, re.IGNORECASE):
-                   break
-               desc_lines.append(riga)
-           desc_val = ' '.join(desc_lines).strip()
-           # Riconosci solo le 3 descrizioni valide
-           desc_val_upper = desc_val.upper()
-           if 'ELEMENTI TECNICI' in desc_val_upper:
+       # ── Parser Volkswagen — estrazione tabelle con pdfplumber ──
+       import pdfplumber
+       # Struttura dati per ogni riga fattura
+       current_block = None
+       all_blocks = []
+       with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+           for page in pdf.pages:
+               # Estrai le parole con coordinate
+               words = page.extract_words(keep_blank_chars=False, use_text_flow=True)
+               # Raggruppa per Y (riga visiva)
+               rows_by_y = {}
+               for w in words:
+                   y_key = round(w['top'] / 5) * 5  # bucket da 5pt
+                   if y_key not in rows_by_y:
+                       rows_by_y[y_key] = []
+                   rows_by_y[y_key].append(w['text'])
+               # Processa le righe nell'ordine visivo
+               for y_key in sorted(rows_by_y.keys()):
+                   row_text = ' '.join(rows_by_y[y_key]).strip()
+                   if not row_text:
+                       continue
+                   # Nuova riga fattura: inizia con ADDEBITO PENALE PER
+                   if re.match(r'ADDEBITO\s+PENALE\s+PER', row_text, re.IGNORECASE):
+                       if current_block:
+                           all_blocks.append(current_block)
+                       current_block = {
+                           'desc_raw': row_text,
+                           'telaio': '',
+                           'targa': '',
+                           'prezzo': '',
+                           'lines': [row_text]
+                       }
+                   elif current_block is not None:
+                       current_block['lines'].append(row_text)
+                       # Telaio
+                       if 'TELAIO' in row_text.upper() and not current_block['telaio']:
+                           m = re.search(r'TELAIO\s+(\S+)', row_text, re.IGNORECASE)
+                           if m:
+                               current_block['telaio'] = m.group(1)
+                       if re.match(r'Rif\.\s*testo:', row_text, re.IGNORECASE):
+                           val = re.sub(r'Rif\.\s*testo:\s*', '', row_text).strip()
+                           # Assegna al campo giusto in base alla riga precedente
+                           prev_lines = current_block['lines'][:-1]
+                           for pl in reversed(prev_lines):
+                               if 'TELAIO' in pl.upper() and not current_block['telaio']:
+                                   current_block['telaio'] = val
+                                   break
+                               if 'TARGA' in pl.upper() and not current_block['targa']:
+                                   current_block['targa'] = val
+                                   break
+                       # Targa diretta
+                       if 'TARGA' in row_text.upper():
+                           m = re.search(r'TARGA\s+([A-Z]{2}\d{3}[A-Z]{2})', row_text, re.IGNORECASE)
+                           if m and not current_block['targa']:
+                               current_block['targa'] = m.group(1)
+                       # Prezzo: pattern "X,XX N1 X,XX"
+                       m_p = re.search(r'[\d,.]+\s+N[12T]\s+([\d]{1,3}(?:[.,]\d{3})*[.,]\d{2})', row_text, re.IGNORECASE)
+                       if m_p and not current_block['prezzo']:
+                           current_block['prezzo'] = m_p.group(1).replace('.','').replace(',','.')
+       # Ultimo blocco
+       if current_block:
+           all_blocks.append(current_block)
+       print(f"=== VW BLOCKS trovati: {len(all_blocks)} ===")
+       for b in all_blocks[:3]:
+           print(repr(b))
+       # Converti blocchi in righe
+       for block in all_blocks:
+           desc_raw = block.get('desc_raw', '')
+           desc_upper = desc_raw.upper()
+           if 'ELEMENTI TECNICI' in desc_upper:
                desc_val = 'Addebito Penale per Elementi Tecnici Mancanti'
-           elif 'ECCEDENZA' in desc_val_upper or 'CHILOMETRICA' in desc_val_upper:
+           elif 'ECCEDENZA' in desc_upper or 'CHILOMETRICA' in desc_upper:
                desc_val = 'Addebito Penale per Eccedenza Chilometrica'
-           elif 'DANNI' in desc_val_upper:
+           elif 'DANNI' in desc_upper:
                desc_val = 'Addebito Penale per Danni'
            else:
-               desc_val = desc_val.split('-')[0].strip()
-           # Telaio: cerca "Tipo dato:TELAIO\nRif. testo:XXX"
-           m_telaio = re.search(r'Tipo\s*dato:TELAIO\s*\nRif\.\s*testo:(\S+)', blocco_text, re.IGNORECASE)
-           telaio_val = m_telaio.group(1).strip() if m_telaio else ""
-           # Targa: cerca "Tipo dato:TARGA\nRif. testo:XXX"
-           m_targa = re.search(r'Tipo\s*dato:TARGA\s*\nRif\.\s*testo:(\S+)', blocco_text, re.IGNORECASE)
-           targa_val = m_targa.group(1).strip() if m_targa else ""
-           # Prezzo: "numero N1 numero" — prende il secondo numero
-           m_prezzo = re.search(r'[\d,.]+\s+N[12T]\s+([\d]{1,3}(?:[.,]\d{3})*[.,]\d{2})', blocco_text, re.IGNORECASE)
-           prezzo_val = ""
-           if m_prezzo:
-               prezzo_val = m_prezzo.group(1).replace('.', '').replace(',', '.')
+               desc_val = desc_raw.split('-')[0].strip()
+           prezzo_val = block.get('prezzo', '')
            try:
                if prezzo_val and abs(float(prezzo_val)) == IMPORTO_BOLLO:
                    continue
@@ -216,8 +250,8 @@ def parse_pdf_fattura(pdf_bytes):
            if not prezzo_val:
                continue
            righe.append({
-               "targa":         targa_val,
-               "telaio":        telaio_val,
+               "targa":         block.get('targa', ''),
+               "telaio":        block.get('telaio', ''),
                "descrizione":   desc_val,
                "prezzo_totale": prezzo_val,
            })
