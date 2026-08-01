@@ -518,181 +518,416 @@ HTML = '''<!DOCTYPE html>
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Estrattore Fatture</title>
-<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@700;800&display=swap" rel="stylesheet"/>
+<title>Estrattore Fatture — Hertz</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-:root{--orange:#ff6b35;--bg:#0e0e0e;--bg2:#131313;--border:#2a2a2a;--text:#e8e8e8;--green:#5aff9a;--red:#ff5a5a}
-body{background:var(--bg);color:var(--text);font-family:"DM Mono",monospace;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:48px 24px 64px;gap:24px}
-::-webkit-scrollbar{width:6px}::-webkit-scrollbar-thumb{background:var(--orange);border-radius:3px}
-.badge{background:var(--orange);color:var(--bg);font-family:"Syne",sans-serif;font-weight:700;font-size:11px;letter-spacing:2px;padding:4px 12px;border-radius:2px;margin-bottom:12px;display:inline-block}
-h1{font-family:"Syne",sans-serif;font-weight:800;font-size:clamp(32px,5vw,58px);color:#fff;letter-spacing:-1px;line-height:1}
-.sub{margin-top:10px;font-size:13px;color:#888}
-.header{text-align:center;margin-bottom:8px}
-.upload-area{width:100%;max-width:620px;display:flex;flex-direction:column}
-.drop-zone{border:1.5px dashed var(--border);border-radius:8px 8px 0 0;padding:32px 24px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:8px;transition:.2s;background:rgba(255,255,255,.02);text-align:center}
-.drop-zone:hover,.drop-zone.over{border-color:var(--orange);background:rgba(255,107,53,.06)}
-.drop-icon{font-size:30px;opacity:.5}
-.drop-text{font-size:14px;color:#ccc}
-.drop-sub{font-size:11px;color:#444}
-.or-div{background:#1a1a1a;padding:8px;text-align:center;font-size:11px;color:#444;letter-spacing:1px;border-left:1.5px solid var(--border);border-right:1.5px solid var(--border)}
-.folder-btn{border:1.5px dashed var(--border);border-top:none;border-radius:0 0 8px 8px;padding:20px 24px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:4px;transition:.2s;background:rgba(255,255,255,.02);color:#aaa;font-size:14px;font-family:"DM Mono",monospace}
-.folder-btn:hover{border-color:var(--orange);background:rgba(255,107,53,.06);color:var(--orange)}
-.folder-sub{font-size:11px;color:#444}
-.file-panel{width:100%;max-width:620px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;overflow:hidden;display:none}
+:root{
+ --bg:#0a0a0f;
+ --surface:#111118;
+ --surface2:#1a1a24;
+ --border:#ffffff0f;
+ --border2:#ffffff18;
+ --accent:#ff6b35;
+ --accent2:#ff9a6c;
+ --green:#00e5a0;
+ --red:#ff4d6d;
+ --text:#f0f0f5;
+ --muted:#7070a0;
+ --dim:#3a3a55;
+}
+body{
+ background:var(--bg);
+ color:var(--text);
+ font-family:'Inter',sans-serif;
+ min-height:100vh;
+ display:flex;
+ flex-direction:column;
+ align-items:center;
+ padding:0 0 80px;
+}
+::-webkit-scrollbar{width:4px}
+::-webkit-scrollbar-thumb{background:var(--accent);border-radius:2px}
+/* HERO */
+.hero{
+ width:100%;
+ background:linear-gradient(135deg,#0a0a0f 0%,#12101e 50%,#0f1218 100%);
+ border-bottom:1px solid var(--border2);
+ padding:60px 24px 48px;
+ text-align:center;
+ position:relative;
+ overflow:hidden;
+}
+.hero::before{
+ content:'';
+ position:absolute;
+ top:-120px;left:50%;transform:translateX(-50%);
+ width:600px;height:300px;
+ background:radial-gradient(ellipse,rgba(255,107,53,0.15) 0%,transparent 70%);
+ pointer-events:none;
+}
+.hero-badge{
+ display:inline-flex;align-items:center;gap:8px;
+ background:rgba(255,107,53,0.1);
+ border:1px solid rgba(255,107,53,0.3);
+ color:var(--accent2);
+ font-size:12px;font-weight:600;letter-spacing:1.5px;text-transform:uppercase;
+ padding:6px 16px;border-radius:100px;
+ margin-bottom:24px;
+}
+.hero-badge::before{content:'●';font-size:8px;color:var(--accent)}
+h1{
+ font-family:'Space Grotesk',sans-serif;
+ font-size:clamp(32px,5vw,56px);
+ font-weight:700;
+ color:#fff;
+ letter-spacing:-1.5px;
+ line-height:1.1;
+ margin-bottom:12px;
+}
+h1 span{
+ background:linear-gradient(90deg,var(--accent),var(--accent2));
+ -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+}
+.hero-sub{
+ font-size:16px;color:var(--muted);font-weight:400;
+ max-width:480px;margin:0 auto;line-height:1.6;
+}
+.hero-stats{
+ display:flex;gap:32px;justify-content:center;margin-top:40px;flex-wrap:wrap;
+}
+.stat{text-align:center}
+.stat-val{font-family:'Space Grotesk',sans-serif;font-size:24px;font-weight:700;color:#fff}
+.stat-label{font-size:12px;color:var(--muted);margin-top:2px}
+/* MAIN */
+.main{width:100%;max-width:680px;padding:40px 24px 0;display:flex;flex-direction:column;gap:20px}
+/* CARD */
+.card{
+ background:var(--surface);
+ border:1px solid var(--border);
+ border-radius:16px;
+ overflow:hidden;
+}
+.card-header{
+ padding:16px 20px;
+ border-bottom:1px solid var(--border);
+ display:flex;align-items:center;gap:10px;
+}
+.card-icon{
+ width:32px;height:32px;border-radius:8px;
+ background:rgba(255,107,53,0.1);
+ display:flex;align-items:center;justify-content:center;
+ font-size:16px;
+}
+.card-title{font-size:14px;font-weight:600;color:#fff}
+.card-sub{font-size:12px;color:var(--muted);margin-top:1px}
+/* UPLOAD */
+.drop-zone{
+ padding:32px 24px;
+ display:flex;flex-direction:column;align-items:center;gap:10px;
+ cursor:pointer;
+ transition:.2s;
+ border-bottom:1px solid var(--border);
+ background:transparent;
+}
+.drop-zone:hover,.drop-zone.over{background:rgba(255,107,53,0.04)}
+.drop-icon-wrap{
+ width:56px;height:56px;border-radius:16px;
+ background:linear-gradient(135deg,rgba(255,107,53,0.15),rgba(255,107,53,0.05));
+ border:1px solid rgba(255,107,53,0.2);
+ display:flex;align-items:center;justify-content:center;
+ font-size:24px;
+ transition:.2s;
+}
+.drop-zone:hover .drop-icon-wrap{
+ background:linear-gradient(135deg,rgba(255,107,53,0.25),rgba(255,107,53,0.1));
+ transform:translateY(-2px);
+}
+.drop-text{font-size:14px;font-weight:500;color:var(--text)}
+.drop-sub{font-size:12px;color:var(--muted)}
+.or-row{
+ display:flex;align-items:center;gap:12px;
+ padding:0 24px;
+ font-size:11px;color:var(--dim);letter-spacing:1px;text-transform:uppercase;
+}
+.or-row::before,.or-row::after{content:'';flex:1;height:1px;background:var(--border)}
+.folder-btn{
+ padding:16px 24px;
+ display:flex;align-items:center;gap:12px;
+ cursor:pointer;transition:.2s;
+ background:transparent;font-family:'Inter',sans-serif;
+ color:var(--muted);font-size:13px;width:100%;
+}
+.folder-btn:hover{background:rgba(255,255,255,0.03);color:var(--text)}
+.folder-icon{
+ width:36px;height:36px;border-radius:10px;
+ background:var(--surface2);border:1px solid var(--border);
+ display:flex;align-items:center;justify-content:center;font-size:18px;
+ flex-shrink:0;
+}
+.folder-text{text-align:left}
+.folder-label{font-weight:500;color:var(--text);font-size:13px}
+.folder-desc{font-size:11px;color:var(--muted);margin-top:2px}
+/* FILE LIST */
+.file-panel{background:var(--surface);border:1px solid var(--border);border-radius:16px;overflow:hidden;display:none}
 .file-panel.show{display:block}
-.fp-header{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid #1e1e1e;background:#161616}
-.fp-count{font-size:12px;color:var(--orange)}
-.clear-btn{background:transparent;border:1px solid var(--border);color:#555;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer;font-family:"DM Mono",monospace}
+.file-panel-header{
+ padding:12px 16px;border-bottom:1px solid var(--border);
+ display:flex;justify-content:space-between;align-items:center;
+ background:var(--surface2);
+}
+.file-count{font-size:12px;font-weight:600;color:var(--accent)}
+.clear-btn{
+ background:transparent;border:1px solid var(--border);color:var(--muted);
+ font-size:11px;padding:4px 10px;border-radius:6px;cursor:pointer;font-family:'Inter',sans-serif;
+ transition:.15s;
+}
 .clear-btn:hover{color:var(--red);border-color:var(--red)}
-.file-list{max-height:160px;overflow-y:auto;padding:6px 0}
-.file-row{display:flex;justify-content:space-between;align-items:center;padding:4px 16px;font-size:12px;color:#888}
-.rm-btn{background:transparent;border:none;color:#444;cursor:pointer;font-size:12px;padding:2px 6px}
-.rm-btn:hover{color:var(--red)}
-.run-btn{background:var(--orange);color:var(--bg);font-family:"Syne",sans-serif;font-weight:700;font-size:15px;border:none;border-radius:6px;padding:14px 48px;cursor:pointer;transition:.2s;box-shadow:0 4px 16px rgba(255,107,53,.25)}
-.run-btn:hover:not(:disabled){background:#ff8c5a;transform:translateY(-1px);box-shadow:0 6px 24px rgba(255,107,53,.4)}
-.run-btn:disabled{opacity:.4;cursor:not-allowed}
-.progress-wrap{width:100%;max-width:620px;display:none;flex-direction:column;gap:6px}
-.progress-wrap.show{display:flex}
-.progress-track{width:100%;height:6px;background:#222;border-radius:3px;overflow:hidden}
-.progress-bar{height:100%;background:linear-gradient(90deg,var(--orange),#ffaa70);border-radius:3px;width:0%;transition:width .3s}
-.log-box{width:100%;max-width:620px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:20px;display:none;flex-direction:column;gap:5px;max-height:240px;overflow-y:auto}
-.log-box.show{display:flex}
-.log{font-size:12px;line-height:1.7}
-.log.ok{color:var(--green)}.log.err{color:var(--red)}.log.zip{color:var(--orange)}.log.info{color:#ccc}
-.done-banner{width:100%;max-width:620px;background:rgba(90,255,154,.08);border:1px solid rgba(90,255,154,.3);color:var(--green);border-radius:8px;padding:16px 24px;font-size:14px;text-align:center;display:none}
-.done-banner.show{display:block}
-.footer{font-size:11px;color:#333;text-align:center;margin-top:8px}
+.file-list{max-height:160px;overflow-y:auto;padding:4px 0}
+.file-row{
+ display:flex;justify-content:space-between;align-items:center;
+ padding:8px 16px;transition:.15s;
+}
+.file-row:hover{background:rgba(255,255,255,0.02)}
+.file-name{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.file-name::before{content:'📄 '}
+.rm-btn{background:transparent;border:none;color:var(--dim);cursor:pointer;font-size:13px;padding:2px 6px;border-radius:4px;transition:.15s}
+.rm-btn:hover{color:var(--red);background:rgba(255,77,109,0.1)}
+/* RUN BUTTON */
+.run-btn{
+ width:100%;
+ background:linear-gradient(135deg,var(--accent),#ff8c5a);
+ color:#fff;
+ font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:15px;
+ border:none;border-radius:12px;padding:16px;
+ cursor:pointer;transition:.2s;
+ box-shadow:0 4px 20px rgba(255,107,53,0.3);
+ position:relative;overflow:hidden;
+}
+.run-btn::before{
+ content:'';position:absolute;top:0;left:-100%;width:100%;height:100%;
+ background:linear-gradient(90deg,transparent,rgba(255,255,255,0.1),transparent);
+ transition:.5s;
+}
+.run-btn:hover:not(:disabled)::before{left:100%}
+.run-btn:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 8px 30px rgba(255,107,53,0.4)}
+.run-btn:disabled{opacity:0.4;cursor:not-allowed;transform:none}
+/* PROGRESS */
+.progress-card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:20px;display:none}
+.progress-card.show{display:block}
+.progress-label{font-size:12px;color:var(--muted);margin-bottom:10px;display:flex;justify-content:space-between}
+.progress-track{width:100%;height:4px;background:var(--surface2);border-radius:2px;overflow:hidden}
+.progress-bar{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:2px;width:0%;transition:width .4s ease}
+/* LOG */
+.log-card{background:var(--surface);border:1px solid var(--border);border-radius:16px;overflow:hidden;display:none}
+.log-card.show{display:block}
+.log-header{padding:12px 16px;border-bottom:1px solid var(--border);background:var(--surface2);font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.5px;text-transform:uppercase}
+.log-body{padding:16px;max-height:220px;overflow-y:auto;display:flex;flex-direction:column;gap:4px}
+.log-line{font-size:12px;font-family:'SF Mono','Fira Code',monospace;line-height:1.7;display:flex;gap:8px;align-items:baseline}
+.log-line::before{content:'›';color:var(--dim);flex-shrink:0}
+.log-info{color:#8888bb}
+.log-ok{color:var(--green)}
+.log-err{color:var(--red)}
+.log-zip{color:var(--accent)}
+/* DONE */
+.done-card{
+ background:linear-gradient(135deg,rgba(0,229,160,0.08),rgba(0,229,160,0.03));
+ border:1px solid rgba(0,229,160,0.2);
+ border-radius:16px;padding:24px;
+ display:none;text-align:center;
+}
+.done-card.show{display:block}
+.done-icon{font-size:36px;margin-bottom:12px}
+.done-title{font-family:'Space Grotesk',sans-serif;font-size:18px;font-weight:600;color:var(--green);margin-bottom:6px}
+.done-sub{font-size:13px;color:var(--muted)}
+.done-stats{display:flex;gap:20px;justify-content:center;margin-top:16px;flex-wrap:wrap}
+.done-stat{
+ background:rgba(0,229,160,0.08);border:1px solid rgba(0,229,160,0.15);
+ border-radius:8px;padding:10px 20px;text-align:center;
+}
+.done-stat-val{font-family:'Space Grotesk',sans-serif;font-size:20px;font-weight:700;color:var(--green)}
+.done-stat-label{font-size:11px;color:var(--muted);margin-top:2px}
+/* FOOTER */
+.footer{
+ margin-top:40px;text-align:center;font-size:11px;color:var(--dim);
+ padding:0 24px;
+}
+.footer a{color:var(--muted);text-decoration:none}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 .pulsing{animation:pulse 1.2s infinite}
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.fade-in{animation:fadeIn .3s ease}
 </style>
 </head>
 <body>
-<div class="header">
-<div class="badge">ESTRATTORE FATTURE</div>
-<h1>XML / ZIP → Excel</h1>
-<p class="sub">Carica XML, PDF o ZIP · Scarica l'Excel</p>
+<!-- HERO -->
+<div class="hero">
+<div class="hero-badge">Estrattore Fatture</div>
+<h1>Da fattura a <span>Excel</span><br>in pochi secondi</h1>
+<p class="hero-sub">Carica XML, PDF o ZIP — il sistema estrae automaticamente tutti i dati strutturati.</p>
+<div class="hero-stats">
+<div class="stat"><div class="stat-val">3</div><div class="stat-label">Formati supportati</div></div>
+<div class="stat"><div class="stat-val">∞</div><div class="stat-label">File per volta</div></div>
+<div class="stat"><div class="stat-val">2</div><div class="stat-label">Fogli Excel</div></div>
 </div>
-<div class="upload-area">
+</div>
+<!-- MAIN -->
+<div class="main">
+<!-- UPLOAD CARD -->
+<div class="card">
+<div class="card-header">
+<div class="card-icon">📂</div>
+<div>
+<div class="card-title">Carica i tuoi file</div>
+<div class="card-sub">XML, PDF o ZIP · anche più file insieme</div>
+</div>
+</div>
 <label class="drop-zone" id="dropZone">
 <input type="file" id="fileInput" accept=".xml,.zip,.pdf" multiple style="display:none"/>
-<div class="drop-icon">⬇</div>
-<div class="drop-text">Trascina qui XML, PDF o ZIP oppure clicca</div>
-<div class="drop-sub">Puoi caricare più file contemporaneamente</div>
+<div class="drop-icon-wrap">⬇</div>
+<div class="drop-text">Trascina qui i file oppure clicca</div>
+<div class="drop-sub">XML · PDF · ZIP supportati</div>
 </label>
-<div class="or-div">OPPURE</div>
+<div class="or-row">oppure</div>
 <label class="folder-btn">
 <input type="file" id="folderInput" style="display:none" webkitdirectory directory/>
-   📁 &nbsp;Carica una cartella intera
-<div class="folder-sub">Prende tutti gli XML e ZIP al suo interno</div>
+<div class="folder-icon">🗂</div>
+<div class="folder-text">
+<div class="folder-label">Carica una cartella intera</div>
+<div class="folder-desc">Prende automaticamente tutti gli XML e ZIP al suo interno</div>
+</div>
 </label>
 </div>
+<!-- FILE LIST -->
 <div class="file-panel" id="filePanel">
-<div class="fp-header">
-<span class="fp-count" id="fpCount">0 file selezionati</span>
+<div class="file-panel-header">
+<span class="file-count" id="fpCount">0 file selezionati</span>
 <button class="clear-btn" onclick="clearAll()">✕ Svuota tutto</button>
 </div>
 <div class="file-list" id="fileList"></div>
 </div>
-<button class="run-btn" id="runBtn" onclick="handleRun()" disabled>▶ &nbsp;Avvia Estrazione</button>
-<div class="progress-wrap" id="progressWrap">
+<!-- RUN -->
+<button class="run-btn" id="runBtn" onclick="handleRun()" disabled>
+   ▶ &nbsp;Avvia Estrazione
+</button>
+<!-- PROGRESS -->
+<div class="progress-card" id="progressWrap">
+<div class="progress-label">
+<span>Elaborazione in corso...</span>
+<span id="progressPct">0%</span>
+</div>
 <div class="progress-track"><div class="progress-bar" id="progressBar"></div></div>
 </div>
-<div class="log-box" id="logBox"></div>
-<div class="done-banner" id="doneBanner"></div>
-<div class="footer">I file vengono elaborati sul server e non vengono salvati.</div>
+<!-- LOG -->
+<div class="log-card" id="logCard">
+<div class="log-header">Log di sistema</div>
+<div class="log-body" id="logBox"></div>
+</div>
+<!-- DONE -->
+<div class="done-card" id="doneBanner">
+<div class="done-icon">✅</div>
+<div class="done-title">Estrazione completata!</div>
+<div class="done-sub">Il file <strong>estrazione_fatture.xlsx</strong> è stato scaricato</div>
+<div class="done-stats" id="doneStats"></div>
+</div>
+<div class="footer">
+   I file vengono elaborati sul server e non vengono salvati. &nbsp;·&nbsp;
+<a href="#">estrattore-fatture.onrender.com</a>
+</div>
+</div>
 <script>
 let selectedFiles = [];
 function addFiles(newFiles) {
  const valid = Array.from(newFiles).filter(f =>
-   f.name.toLowerCase().endsWith('.xml') || f.name.toLowerCase().endsWith('.zip') || f.name.toLowerCase().endsWith('.pdf')
+   ['xml','zip','pdf'].some(ext => f.name.toLowerCase().endsWith('.'+ext))
  );
- const existing = new Set(selectedFiles.map(f => f.name + f.size));
- valid.forEach(f => { if (!existing.has(f.name + f.size)) selectedFiles.push(f); });
+ const existing = new Set(selectedFiles.map(f => f.name+f.size));
+ valid.forEach(f => { if(!existing.has(f.name+f.size)) selectedFiles.push(f); });
  render();
 }
-function removeFile(i) { selectedFiles.splice(i,1); render(); }
-function clearAll() {
- selectedFiles = [];
- render();
- document.getElementById('logBox').classList.remove('show');
+function removeFile(i){ selectedFiles.splice(i,1); render(); }
+function clearAll(){
+ selectedFiles=[];render();
+ document.getElementById('logCard').classList.remove('show');
  document.getElementById('doneBanner').classList.remove('show');
 }
-function render() {
- const panel = document.getElementById('filePanel');
- const list  = document.getElementById('fileList');
- const count = document.getElementById('fpCount');
- const btn   = document.getElementById('runBtn');
- if (!selectedFiles.length) { panel.classList.remove('show'); btn.disabled=true; return; }
- panel.classList.add('show');
- btn.disabled = false;
- count.textContent = selectedFiles.length + ' file selezionati';
- list.innerHTML = selectedFiles.map((f,i) =>
-   `<div class="file-row"><span>📄 ${f.name}</span><button class="rm-btn" onclick="removeFile(${i})">✕</button></div>`
- ).join('');
+function render(){
+ const panel=document.getElementById('filePanel');
+ const list=document.getElementById('fileList');
+ const count=document.getElementById('fpCount');
+ const btn=document.getElementById('runBtn');
+ if(!selectedFiles.length){panel.classList.remove('show');btn.disabled=true;return;}
+ panel.classList.add('show');btn.disabled=false;
+ count.textContent=selectedFiles.length+' file selezionati';
+ list.innerHTML=selectedFiles.map((f,i)=>`
+<div class="file-row fade-in">
+<span class="file-name">${f.name}</span>
+<button class="rm-btn" onclick="removeFile(${i})">✕</button>
+</div>`).join('');
 }
-document.getElementById('fileInput').onchange = e => addFiles(e.target.files);
-document.getElementById('folderInput').onchange = e => addFiles(e.target.files);
-const dz = document.getElementById('dropZone');
-dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('over'); });
-dz.addEventListener('dragleave', () => dz.classList.remove('over'));
-dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('over'); addFiles(e.dataTransfer.files); });
-dz.addEventListener('click', () => document.getElementById('fileInput').click());
-function log(msg, type='info') {
- const box = document.getElementById('logBox');
- box.classList.add('show');
- const d = document.createElement('div');
- d.className = 'log ' + type;
- d.textContent = msg;
+document.getElementById('fileInput').onchange=e=>addFiles(e.target.files);
+document.getElementById('folderInput').onchange=e=>addFiles(e.target.files);
+const dz=document.getElementById('dropZone');
+dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('over');});
+dz.addEventListener('dragleave',()=>dz.classList.remove('over'));
+dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('over');addFiles(e.dataTransfer.files);});
+dz.addEventListener('click',()=>document.getElementById('fileInput').click());
+function log(msg,type='info'){
+ const box=document.getElementById('logBox');
+ document.getElementById('logCard').classList.add('show');
+ const d=document.createElement('div');
+ d.className='log-line log-'+type+' fade-in';
+ d.textContent=msg;
  box.appendChild(d);
- box.scrollTop = box.scrollHeight;
+ box.scrollTop=box.scrollHeight;
 }
-async function handleRun() {
- if (!selectedFiles.length) return;
- const btn = document.getElementById('runBtn');
- btn.disabled = true;
- btn.classList.add('pulsing');
- btn.textContent = '⏳  Elaborazione in corso…';
- document.getElementById('logBox').innerHTML = '';
- document.getElementById('logBox').classList.add('show');
+function setProgress(pct){
+ document.getElementById('progressBar').style.width=pct+'%';
+ document.getElementById('progressPct').textContent=pct+'%';
+}
+async function handleRun(){
+ if(!selectedFiles.length) return;
+ const btn=document.getElementById('runBtn');
+ btn.disabled=true;btn.classList.add('pulsing');
+ btn.innerHTML='⏳ &nbsp;Elaborazione in corso…';
+ document.getElementById('logBox').innerHTML='';
+ document.getElementById('logCard').classList.add('show');
  document.getElementById('doneBanner').classList.remove('show');
  document.getElementById('progressWrap').classList.add('show');
- document.getElementById('progressBar').style.width = '30%';
- const fd = new FormData();
- selectedFiles.forEach(f => fd.append('files', f));
- try {
-   log('📤 Invio ' + selectedFiles.length + ' file al server…', 'info');
-   const resp = await fetch('/process', { method: 'POST', body: fd });
-   document.getElementById('progressBar').style.width = '80%';
-   if (!resp.ok) {
-     const err = await resp.json();
-     log('❌ Errore: ' + (err.error || resp.statusText), 'err');
+ setProgress(20);
+ const fd=new FormData();
+ selectedFiles.forEach(f=>fd.append('files',f));
+ try{
+   log('Invio '+selectedFiles.length+' file al server…','info');
+   const resp=await fetch('/process',{method:'POST',body:fd});
+   setProgress(85);
+   if(!resp.ok){
+     const err=await resp.json();
+     log('Errore: '+(err.error||resp.statusText),'err');
      return;
    }
-   // Leggi stats dagli header
-   const fatture  = resp.headers.get('X-Rows-Fatture')  || '?';
-   const dups     = resp.headers.get('X-Rows-Duplicati') || '?';
-   log('✅ Elaborazione completata!', 'ok');
-   log('   Foglio Fatture:   ' + fatture + ' righe', 'ok');
-   log('   Foglio Duplicati: ' + dups + ' righe', 'ok');
-   document.getElementById('progressBar').style.width = '100%';
-   // Download automatico
-   const blob = await resp.blob();
-   const url  = URL.createObjectURL(blob);
-   const a    = document.createElement('a');
-   a.href = url; a.download = 'estrazione_fatture.xlsx';
-   document.body.appendChild(a); a.click();
-   document.body.removeChild(a);
-   URL.revokeObjectURL(url);
-   const banner = document.getElementById('doneBanner');
-   banner.innerHTML = '✅ &nbsp;<strong>estrazione_fatture.xlsx</strong> scaricato! &nbsp;· &nbsp;' + fatture + ' fatture &nbsp;· &nbsp;' + dups + ' duplicati';
-   banner.classList.add('show');
- } catch(e) {
-   log('❌ Errore di rete: ' + e.message, 'err');
- } finally {
-   btn.disabled = false;
-   btn.classList.remove('pulsing');
-   btn.textContent = '▶  Avvia Estrazione';
+   const fatture=resp.headers.get('X-Rows-Fatture')||'?';
+   const dups=resp.headers.get('X-Rows-Duplicati')||'?';
+   log('Elaborazione completata con successo','ok');
+   log('Foglio Fatture: '+fatture+' righe','ok');
+   log('Foglio Duplicati: '+dups+' righe','ok');
+   setProgress(100);
+   const blob=await resp.blob();
+   const url=URL.createObjectURL(blob);
+   const a=document.createElement('a');
+   a.href=url;a.download='estrazione_fatture.xlsx';
+   document.body.appendChild(a);a.click();
+   document.body.removeChild(a);URL.revokeObjectURL(url);
+   const banner=document.getElementById('doneBanner');
+   document.getElementById('doneStats').innerHTML=`
+<div class="done-stat"><div class="done-stat-val">${fatture}</div><div class="done-stat-label">Righe fatture</div></div>
+<div class="done-stat"><div class="done-stat-val">${dups}</div><div class="done-stat-label">Duplicati trovati</div></div>`;
+   banner.classList.add('show','fade-in');
+ }catch(e){
+   log('Errore di rete: '+e.message,'err');
+ }finally{
+   btn.disabled=false;btn.classList.remove('pulsing');
+   btn.innerHTML='▶ &nbsp;Avvia Estrazione';
  }
 }
 </script>
