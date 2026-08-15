@@ -356,6 +356,58 @@ def extract_xml_from_pdf(pdf_bytes: bytes):
        print(f"Nessun XML allegato trovato nel PDF: {e}")
    return None
 
+GEMINI_API_KEY = "AIzaSyAQ.Ab8RN6IhZqV2DefaEHXiH0Th8h8sFG2lJDM8BDMgYs_KuPA7hA"
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+import base64
+import urllib.request
+import json as json_lib
+def extract_with_gemini(pdf_bytes: bytes) -> list:
+   """Usa Gemini AI per estrarre i dati dalla fattura PDF."""
+   pdf_b64 = base64.b64encode(pdf_bytes).decode('utf-8')
+   prompt = """Analizza questa fattura italiana ed estrai i dati in formato JSON.
+Restituisci SOLO un oggetto JSON valido, senza markdown, senza testo aggiuntivo.
+Formato richiesto:
+{
+ "cedente": "nome completo del fornitore",
+ "cessionario": "nome completo del cliente",
+ "numero_documento": "numero fattura (solo cifre o alfanumerico)",
+ "data_documento": "data nel formato gg-mm-aaaa",
+ "righe": [
+   {
+     "targa": "targa veicolo formato AA000AA oppure stringa vuota",
+     "telaio": "codice telaio 17 caratteri oppure stringa vuota",
+     "descrizione": "descrizione della riga (es. ADDEBITO PENALE PER DANNI)",
+     "prezzo_totale": "importo numerico con punto come decimale es. 202.98"
+   }
+ ]
+}
+Regole importanti:
+- Ogni riga del dettaglio deve avere targa E telaio — se sono su pagine diverse appartengono comunque alla stessa riga
+- Escludi righe con importo esattamente 2.00 (bollo virtuale)
+- Il telaio ha sempre 17 caratteri alfanumerici
+- La targa ha sempre 7 caratteri formato AA000AA
+- Restituisci SOLO il JSON"""
+   payload = {
+       "contents": [{
+           "parts": [
+               {"text": prompt},
+               {"inline_data": {"mime_type": "application/pdf", "data": pdf_b64}}
+           ]
+       }],
+       "generationConfig": {"temperature": 0, "maxOutputTokens": 8192}
+   }
+   req = urllib.request.Request(
+       f"{GEMINI_URL}?key={GEMINI_API_KEY}",
+       data=json_lib.dumps(payload).encode('utf-8'),
+       headers={"Content-Type": "application/json"},
+       method="POST"
+   )
+   with urllib.request.urlopen(req, timeout=120) as resp:
+       result = json_lib.loads(resp.read().decode('utf-8'))
+   text = result['candidates'][0]['content']['parts'][0]['text']
+   text = re.sub(r'```json|```', '', text).strip()
+   return json_lib.loads(text)
+
 def process_pdf_bytes(pdf_bytes, all_rows):
    try:
        # Prima prova a estrarre XML allegato dentro il PDF
@@ -363,21 +415,39 @@ def process_pdf_bytes(pdf_bytes, all_rows):
        if xml_data:
            print("XML trovato dentro il PDF - uso parser XML")
            return process_xml_bytes(xml_data, all_rows)
-       print("Nessun XML allegato - uso parser PDF")
-
-       # Log testo grezzo per debug
-       text_preview = ""
-       reader = PdfReader(io.BytesIO(pdf_bytes))
-       for page in reader.pages:
-           t = page.extract_text()
-           if t:
-               text_preview += t + "\n"
-       print("=== PDF TEXT (primi 1500 char) ===")
-       print(repr(text_preview[:1500]))
-       print("==================================")
+       # Usa Gemini AI per leggere qualsiasi formato PDF
+       print("Uso Gemini AI per leggere il PDF...")
+       try:
+           fattura = extract_with_gemini(pdf_bytes)
+           righe = fattura.get("righe", [])
+           base = {
+               "cedente":           fattura.get("cedente", ""),
+               "cessionario":       fattura.get("cessionario", ""),
+               "numero_documento":  fattura.get("numero_documento", ""),
+               "data_documento":    fattura.get("data_documento", ""),
+           }
+           count = 0
+           for r in righe:
+               try:
+                   p = float(str(r.get("prezzo_totale", "0")).replace(',', '.'))
+                   if abs(p) == 2.0:
+                       continue
+               except:
+                   pass
+               all_rows.append({**base,
+                   "targa":         r.get("targa", ""),
+                   "telaio":        r.get("telaio", ""),
+                   "descrizione":   r.get("descrizione", ""),
+                   "prezzo_totale": str(r.get("prezzo_totale", "")),
+               })
+               count += 1
+           print(f"Gemini: {count} righe estratte")
+           return count
+       except Exception as e:
+           print(f"Gemini fallito: {e} — uso parser locale")
+       # Fallback: parser locale
        fattura = parse_pdf_fattura(pdf_bytes)
        righe   = fattura.pop("righe", [])
-       print(f"Righe estratte: {len(righe)}")
        for r in righe:
            all_rows.append({**fattura, **r})
        return len(righe)
