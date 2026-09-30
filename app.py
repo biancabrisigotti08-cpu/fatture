@@ -7,12 +7,17 @@ import re
 import os
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from flask import Flask, request, send_file, jsonify, render_template_string
+import hmac
+from flask import Flask, request, send_file, jsonify, render_template_string, Response
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
 from pypdf import PdfReader
+import crediti
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max upload
+PRICING_URL = os.environ.get("PRICING_URL", "#prezzi")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
+crediti.inizializza()
 HEADER_BG   = "FF6B35"
 HEADER_FONT = "FFFFFF"
 IMPORTO_BOLLO = 2.00
@@ -356,13 +361,18 @@ def extract_xml_from_pdf(pdf_bytes: bytes):
        print(f"Nessun XML allegato trovato nel PDF: {e}")
    return None
 
-GEMINI_API_KEY = "AIzaSyAQ.Ab8RN6IhZqV2DefaEHXiH0Th8h8sFG2lJDM8BDMgYs_KuPA7hA"
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+# La chiave NON va mai scritta nel codice: si imposta su Render come variabile d'ambiente.
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash").strip()
+GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 import base64
 import urllib.request
+import urllib.error
 import json as json_lib
 def extract_with_gemini(pdf_bytes: bytes) -> list:
    """Usa Gemini AI per estrarre i dati dalla fattura PDF."""
+   if not GEMINI_API_KEY:
+       raise RuntimeError("GEMINI_API_KEY non impostata")
    pdf_b64 = base64.b64encode(pdf_bytes).decode('utf-8')
    prompt = """Analizza questa fattura italiana ed estrai i dati in formato JSON.
 Restituisci SOLO un oggetto JSON valido, senza markdown, senza testo aggiuntivo.
@@ -394,17 +404,23 @@ Regole importanti:
                {"inline_data": {"mime_type": "application/pdf", "data": pdf_b64}}
            ]
        }],
-       "generationConfig": {"temperature": 0, "maxOutputTokens": 8192}
+       "generationConfig": {"temperature": 0, "maxOutputTokens": 8192,
+                            "responseMimeType": "application/json"}
    }
    req = urllib.request.Request(
-       f"{GEMINI_URL}?key={GEMINI_API_KEY}",
+       GEMINI_URL,
        data=json_lib.dumps(payload).encode('utf-8'),
-       headers={"Content-Type": "application/json"},
+       headers={"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY},
        method="POST"
    )
-   with urllib.request.urlopen(req, timeout=120) as resp:
-       result = json_lib.loads(resp.read().decode('utf-8'))
-   text = result['candidates'][0]['content']['parts'][0]['text']
+   try:
+       with urllib.request.urlopen(req, timeout=110) as resp:
+           result = json_lib.loads(resp.read().decode('utf-8'))
+   except urllib.error.HTTPError as e:
+       dettaglio = e.read().decode('utf-8', 'replace')[:300]
+       raise RuntimeError(f"Gemini HTTP {e.code}: {dettaglio}")
+   parts = result['candidates'][0]['content']['parts']
+   text = "".join(p.get('text', '') for p in parts if not p.get('thought'))
    text = re.sub(r'```json|```', '', text).strip()
    return json_lib.loads(text)
 
@@ -612,7 +628,7 @@ HTML = '''<!DOCTYPE html>
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Estrattore Fatture — Hertz</title>
+<title>Estrattore Fatture</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -847,6 +863,23 @@ h1 span{
  padding:0 24px;
 }
 .footer a{color:var(--muted);text-decoration:none}
+/* CREDITI */
+.quota-body{padding:16px 20px;display:flex;flex-direction:column;gap:12px}
+.quota-line{font-size:13px;color:var(--muted);line-height:1.5}
+.quota-line strong{color:var(--text)}
+.quota-ok{color:var(--green)!important}
+.quota-err{color:var(--red)!important}
+.code-row{display:flex;gap:8px;flex-wrap:wrap}
+.code-input{flex:1;min-width:180px;background:var(--surface2);border:1px solid var(--border2);color:var(--text);
+ border-radius:10px;padding:10px 12px;font-family:'SF Mono','Fira Code',monospace;font-size:13px;text-transform:uppercase}
+.code-btn{background:var(--surface2);border:1px solid rgba(255,107,53,0.4);color:var(--accent2);border-radius:10px;
+ padding:10px 16px;font-family:'Inter',sans-serif;font-size:13px;font-weight:600;cursor:pointer}
+.code-btn:hover{background:rgba(255,107,53,0.1)}
+.buy-link{color:var(--accent2);font-weight:600}
+.paywall{background:rgba(255,107,53,0.08);border:1px solid rgba(255,107,53,0.3);border-radius:16px;padding:20px;
+ display:none;font-size:14px;line-height:1.6}
+.paywall.show{display:block}
+.paywall a{color:var(--accent2);font-weight:600}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 .pulsing{animation:pulse 1.2s infinite}
 @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
@@ -900,6 +933,26 @@ h1 span{
 </div>
 <div class="file-list" id="fileList"></div>
 </div>
+<!-- CREDITI -->
+<div class="card">
+<div class="card-header">
+<div class="card-icon">🎟</div>
+<div>
+<div class="card-title">I tuoi crediti</div>
+<div class="card-sub">XML sempre gratis · {{ free_pdf }} PDF gratis al mese</div>
+</div>
+</div>
+<div class="quota-body">
+<div class="quota-line" id="quotaText">Caricamento…</div>
+<div class="code-row">
+<input class="code-input" id="codeInput" placeholder="FE-XXXX-XXXX-XXXX" autocomplete="off"/>
+<button class="code-btn" onclick="saveCode()">Usa codice</button>
+</div>
+<div class="quota-line">Ti servono più PDF? <a class="buy-link" href="{{ pricing_url }}" target="_blank" rel="noopener">Vedi i pacchetti</a></div>
+</div>
+</div>
+<!-- PAYWALL -->
+<div class="paywall" id="paywall"></div>
 <!-- RUN -->
 <button class="run-btn" id="runBtn" onclick="handleRun()" disabled>
    ▶ &nbsp;Avvia Estrazione
@@ -931,6 +984,46 @@ h1 span{
 </div>
 <script>
 let selectedFiles = [];
+const PRICING_URL = {{ pricing_url|tojson }};
+function getCode(){ try{ return localStorage.getItem('fe_codice')||''; }catch(e){ return window._feCode||''; } }
+function setCode(c){ try{ localStorage.setItem('fe_codice',c); }catch(e){ window._feCode=c; } }
+async function refreshQuota(){
+ const el=document.getElementById('quotaText');
+ try{
+   const r=await fetch('/quota',{headers:{'X-Codice':getCode()}});
+   const q=await r.json();
+   const parts=[];
+   parts.push('PDF gratis rimasti questo mese: <strong>'+q.gratis_rimasti+' di '+q.gratis_mese+'</strong>');
+   el.className='quota-line';
+   if(q.codice){
+     const c=q.codice;
+     if(!c.valido){
+       parts.push('<span class="quota-err">Codice '+(c.scaduto?'scaduto':'esaurito')+'</span>');
+     }else if(c.illimitato){
+       parts.push('<span class="quota-ok">Codice attivo: PDF illimitati</span>');
+     }else{
+       parts.push('<span class="quota-ok">Codice attivo: '+c.rimasti+' PDF rimasti'+(c.scadenza?' (scade il '+c.scadenza.split('-').reverse().join('/')+')':'')+'</span>');
+     }
+   }else if(getCode()){
+     parts.push('<span class="quota-err">Codice non riconosciuto</span>');
+   }
+   el.innerHTML=parts.join('<br>');
+ }catch(e){ el.textContent='Impossibile leggere i crediti in questo momento.'; }
+}
+function saveCode(){
+ const c=document.getElementById('codeInput').value.trim().toUpperCase();
+ setCode(c); refreshQuota();
+}
+document.getElementById('codeInput').value=getCode();
+refreshQuota();
+function showPaywall(msg){
+ const p=document.getElementById('paywall');
+ p.textContent='';
+ const t=document.createElement('div'); t.textContent=msg; p.appendChild(t);
+ const a=document.createElement('a'); a.href=PRICING_URL; a.target='_blank'; a.rel='noopener';
+ a.textContent='Acquista un pacchetto PDF →'; p.appendChild(document.createElement('br')); p.appendChild(a);
+ p.classList.add('show');
+}
 function addFiles(newFiles) {
  const valid = Array.from(newFiles).filter(f =>
    ['xml','zip','pdf'].some(ext => f.name.toLowerCase().endsWith('.'+ext))
@@ -993,11 +1086,19 @@ async function handleRun(){
  selectedFiles.forEach(f=>fd.append('files',f));
  try{
    log('Invio '+selectedFiles.length+' file al server…','info');
-   const resp=await fetch('/process',{method:'POST',body:fd});
+   document.getElementById('paywall').classList.remove('show');
+   const resp=await fetch('/process',{method:'POST',body:fd,headers:{'X-Codice':getCode()}});
    setProgress(85);
    if(!resp.ok){
-     const err=await resp.json();
-     log('Errore: '+(err.error||resp.statusText),'err');
+     let err={};
+     try{ err=await resp.json(); }catch(e){}
+     if(resp.status===402){
+       log('Crediti PDF insufficienti','err');
+       showPaywall(err.error||'Crediti PDF esauriti.');
+     }else{
+       log('Errore: '+(err.error||resp.statusText),'err');
+     }
+     setProgress(0);
      return;
    }
    const fatture=resp.headers.get('X-Rows-Fatture')||'?';
@@ -1017,6 +1118,7 @@ async function handleRun(){
 <div class="done-stat"><div class="done-stat-val">${fatture}</div><div class="done-stat-label">Righe fatture</div></div>
 <div class="done-stat"><div class="done-stat-val">${dups}</div><div class="done-stat-label">Duplicati trovati</div></div>`;
    banner.classList.add('show','fade-in');
+   refreshQuota();
  }catch(e){
    log('Errore di rete: '+e.message,'err');
  }finally{
@@ -1028,38 +1130,134 @@ async function handleRun(){
 </body>
 </html>'''
 
-@app.route('/debug', methods=['POST'])
-def debug():
-   """Endpoint di debug: restituisce il testo grezzo estratto dal PDF."""
-   files = request.files.getlist('files')
-   if not files:
-       return jsonify({"error": "Nessun file"}), 400
-   f = files[0]
-   data = f.read()
-   text = ""
-   try:
-       with pdfplumber.open(io.BytesIO(data)) as pdf:
-           for page in pdf.pages:
-               t = page.extract_text()
-               if t:
-                   text += t + "\n"
-   except Exception as e:
-       return jsonify({"error": str(e)}), 500
-   return jsonify({"text": text[:3000]})
+ADMIN_HTML = '''<!DOCTYPE html>
+<html lang="it"><head><meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Admin codici</title>
+<style>
+body{font-family:system-ui,sans-serif;background:#0a0a0f;color:#f0f0f5;max-width:760px;margin:0 auto;padding:24px 16px}
+h1{font-size:22px;margin-bottom:16px}h2{font-size:16px;margin:28px 0 10px;color:#ff9a6c}
+form{display:grid;gap:10px;background:#111118;border:1px solid #ffffff18;border-radius:12px;padding:16px}
+label{font-size:13px;color:#a0a0c0;display:grid;gap:4px}
+input,select{background:#1a1a24;color:#fff;border:1px solid #ffffff22;border-radius:8px;padding:9px;font-size:14px}
+button{background:#ff6b35;color:#fff;border:none;border-radius:8px;padding:11px;font-weight:600;font-size:14px;cursor:pointer}
+.nuovo{background:rgba(0,229,160,.1);border:1px solid rgba(0,229,160,.3);border-radius:12px;padding:16px;margin-bottom:16px}
+.nuovo code{font-size:22px;color:#00e5a0;user-select:all}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:7px 6px;border-bottom:1px solid #ffffff12}
+th{color:#7070a0;font-weight:500}td code{color:#ff9a6c}
+.wrap{overflow-x:auto}
+</style></head><body>
+<h1>Codici di sblocco</h1>
+{% if nuovo %}<div class="nuovo">Codice creato, copialo e mandalo al cliente:<br><code>{{ nuovo }}</code></div>{% endif %}
+<form method="post">
+<label>Tipo
+<select name="tipo">
+<option value="pacchetto">Pacchetto PDF (nessuna scadenza)</option>
+<option value="abbonamento">Abbonamento (scade dopo i giorni indicati)</option>
+<option value="illimitato">Illimitato (uso personale)</option>
+</select></label>
+<label>PDF inclusi<input name="crediti" type="number" min="1" value="100"/></label>
+<label>Giorni di validità (solo abbonamento)<input name="giorni" type="number" min="1" value="31"/></label>
+<label>Nota (es. nome cliente o ID transazione PayPal)<input name="nota" maxlength="200"/></label>
+<button type="submit">Crea codice</button>
+</form>
+<h2>Ultimi codici</h2>
+<div class="wrap"><table>
+<tr><th>Codice</th><th>PDF</th><th>Usati</th><th>Scadenza</th><th>Nota</th><th>Creato</th></tr>
+{% for c in codici %}<tr><td><code>{{ c[0] }}</code></td>
+<td>{{ "illimitati" if c[1] == -1 else c[1] }}</td><td>{{ c[2] }}</td>
+<td>{{ c[3] or "—" }}</td><td>{{ c[4] or "" }}</td><td>{{ c[5][:16].replace("T", " ") }}</td></tr>
+{% else %}<tr><td colspan="6">Nessun codice ancora.</td></tr>{% endfor %}
+</table></div>
+</body></html>'''
+
+def _admin_ok():
+   auth = request.authorization
+   return bool(ADMIN_PASSWORD) and auth is not None and \
+       hmac.compare_digest((auth.password or "").encode(), ADMIN_PASSWORD.encode())
+
+@app.route('/admin', methods=['GET', 'POST'])
+def admin():
+   if not ADMIN_PASSWORD:
+       return "Pagina admin disattivata: imposta ADMIN_PASSWORD su Render.", 404
+   if not _admin_ok():
+       return Response("Accesso riservato", 401,
+                       {"WWW-Authenticate": 'Basic realm="Admin codici"'})
+   nuovo = None
+   if request.method == 'POST':
+       tipo = request.form.get('tipo', 'pacchetto')
+       nota = request.form.get('nota', '')[:200]
+       try:
+           n = max(1, int(request.form.get('crediti', '100')))
+           giorni = max(1, int(request.form.get('giorni', '31')))
+       except ValueError:
+           return "Valori non validi", 400
+       if tipo == 'illimitato':
+           nuovo = crediti.crea_codice(crediti.ILLIMITATO, None, nota)
+       elif tipo == 'abbonamento':
+           nuovo = crediti.crea_codice(n, giorni, nota)
+       else:
+           nuovo = crediti.crea_codice(n, None, nota)
+   return render_template_string(ADMIN_HTML, nuovo=nuovo, codici=crediti.elenco_codici())
 
 @app.route('/')
 def index():
-   return render_template_string(HTML)
+   return render_template_string(HTML, free_pdf=crediti.FREE_PDF_MONTH, pricing_url=PRICING_URL)
+
+def conta_pdf(name, data, depth=0):
+   """Conta i PDF in un file caricato, compresi quelli dentro gli ZIP."""
+   if name.endswith('.pdf'):
+       return 1
+   if name.endswith('.zip') and depth < 5:
+       try:
+           with zipfile.ZipFile(io.BytesIO(data)) as zf:
+               totale = 0
+               for n in zf.namelist():
+                   low = n.lower()
+                   if low.startswith('__macosx'):
+                       continue
+                   if low.endswith('.pdf'):
+                       totale += 1
+                   elif low.endswith('.zip'):
+                       totale += conta_pdf(low, zf.read(n), depth + 1)
+               return totale
+       except zipfile.BadZipFile:
+           return 0
+   return 0
+
+@app.route('/quota')
+def quota():
+   client = crediti.client_id(request)
+   info = crediti.info_codice(request.headers.get('X-Codice', ''))
+   return jsonify({
+       "gratis_mese": crediti.FREE_PDF_MONTH,
+       "gratis_rimasti": crediti.gratis_rimasti(client),
+       "codice": info,
+   })
 
 @app.route('/process', methods=['POST'])
 def process():
    files = request.files.getlist('files')
    if not files:
        return jsonify({"error": "Nessun file ricevuto"}), 400
+   caricati = [(f.filename.lower(), f.read()) for f in files]
+   n_pdf = sum(conta_pdf(name, data) for name, data in caricati)
+   client = crediti.client_id(request)
+   codice = request.headers.get('X-Codice', '')
+   if n_pdf:
+       disp = crediti.disponibili(client, codice)
+       if disp is not None and n_pdf > disp:
+           return jsonify({
+               "error": f"Hai caricato {n_pdf} PDF ma te ne restano {disp}. "
+                        f"Gli XML sono sempre gratis; per i PDF oltre la quota serve un codice.",
+               "quota_esaurita": True,
+               "pdf_richiesti": n_pdf,
+               "pdf_disponibili": disp,
+               "pricing_url": PRICING_URL,
+           }), 402
    all_rows = []
-   for f in files:
-       name = f.filename.lower()
-       data = f.read()
+   for name, data in caricati:
        if name.endswith('.xml'):
            process_xml_bytes(data, all_rows)
        elif name.endswith('.pdf'):
@@ -1068,6 +1266,7 @@ def process():
            process_zip_bytes(data, all_rows)
    if not all_rows:
        return jsonify({"error": "Nessun dato estratto dai file caricati"}), 422
+   crediti.addebita(client, codice, n_pdf)
    excel_bytes, n_fatture, n_dups = build_excel(all_rows)
    response = send_file(
        excel_bytes,
