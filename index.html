@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Estrattore Fatture · Prezzi</title>
+<meta name="description" content="Estrai i dati delle fatture PDF, XML e ZIP in Excel. XML sempre gratis, PDF gratis ogni mese, pacchetti per chi ne ha di più."/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+ --bg:#0a0a0f;--surface:#111118;--surface2:#1a1a24;
+ --border:#ffffff0f;--border2:#ffffff18;
+ --accent:#ff6b35;--accent2:#ff9a6c;--green:#00e5a0;
+ --text:#f0f0f5;--muted:#8a8ab0;--dim:#4a4a66;
+}
+body{background:var(--bg);color:var(--text);font-family:'Inter',sans-serif;line-height:1.5}
+a{color:inherit}
+.wrap{max-width:1040px;margin:0 auto;padding:0 16px}
+
+/* HERO */
+.hero{text-align:center;padding:64px 16px 40px;position:relative;overflow:hidden;
+ background:linear-gradient(135deg,#0a0a0f 0%,#12101e 50%,#0f1218 100%);border-bottom:1px solid var(--border2)}
+.hero::before{content:'';position:absolute;top:-120px;left:50%;transform:translateX(-50%);
+ width:600px;height:300px;background:radial-gradient(ellipse,rgba(255,107,53,.15) 0%,transparent 70%);pointer-events:none}
+.badge{display:inline-flex;align-items:center;gap:8px;background:rgba(255,107,53,.1);
+ border:1px solid rgba(255,107,53,.3);color:var(--accent2);font-size:12px;font-weight:600;
+ letter-spacing:1.5px;text-transform:uppercase;padding:6px 16px;border-radius:100px;margin-bottom:24px}
+h1{font-family:'Space Grotesk',sans-serif;font-size:clamp(30px,5vw,50px);font-weight:700;
+ letter-spacing:-1.2px;line-height:1.1;color:#fff;margin-bottom:14px}
+h1 span{background:linear-gradient(90deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hero p{color:var(--muted);font-size:16px;max-width:560px;margin:0 auto}
+
+/* PIANI */
+section{padding:48px 0}
+h2{font-family:'Space Grotesk',sans-serif;font-size:24px;color:#fff;margin-bottom:8px;text-align:center}
+.sub{color:var(--muted);text-align:center;font-size:14px;margin-bottom:32px}
+.plans{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+.plan{background:var(--surface);border:1px solid var(--border2);border-radius:16px;padding:24px;
+ display:flex;flex-direction:column;gap:16px;position:relative}
+.plan.top{border-color:rgba(255,107,53,.5);box-shadow:0 8px 40px rgba(255,107,53,.12)}
+.tag{position:absolute;top:-11px;left:24px;background:var(--accent);color:#fff;font-size:11px;
+ font-weight:700;letter-spacing:.8px;text-transform:uppercase;padding:3px 10px;border-radius:100px}
+.plan-name{font-family:'Space Grotesk',sans-serif;font-size:18px;font-weight:600;color:#fff}
+.plan-for{font-size:13px;color:var(--muted);margin-top:2px}
+.price{font-family:'Space Grotesk',sans-serif;font-size:38px;font-weight:700;color:#fff;line-height:1}
+.price small{font-size:14px;font-weight:500;color:var(--muted);margin-left:4px}
+.plan ul{list-style:none;display:flex;flex-direction:column;gap:8px;flex:1}
+.plan li{font-size:14px;display:flex;gap:10px;align-items:baseline}
+.plan li::before{content:'✓';color:var(--accent);font-weight:700;flex-shrink:0}
+.btn{display:block;text-align:center;text-decoration:none;font-family:'Space Grotesk',sans-serif;
+ font-weight:600;font-size:15px;border-radius:12px;padding:14px;transition:.2s}
+.btn-main{background:linear-gradient(135deg,var(--accent),#ff8c5a);color:#fff;box-shadow:0 4px 20px rgba(255,107,53,.3)}
+.btn-main:hover{transform:translateY(-1px);box-shadow:0 8px 30px rgba(255,107,53,.4)}
+.btn-ghost{background:var(--surface2);border:1px solid var(--border2);color:var(--text)}
+.btn-ghost:hover{border-color:rgba(255,107,53,.5)}
+.note{font-size:12px;color:var(--muted);text-align:center}
+
+/* COME FUNZIONA */
+.steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;counter-reset:s}
+.step{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:20px}
+.step::before{counter-increment:s;content:counter(s);display:inline-flex;width:28px;height:28px;
+ border-radius:8px;background:rgba(255,107,53,.12);color:var(--accent2);font-weight:700;
+ align-items:center;justify-content:center;margin-bottom:10px;font-size:14px}
+.step h3{font-size:15px;color:#fff;margin-bottom:4px}
+.step p{font-size:13px;color:var(--muted)}
+
+/* FAQ */
+.faq{max-width:720px;margin:0 auto;display:flex;flex-direction:column;gap:10px}
+details{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 18px}
+summary{cursor:pointer;font-weight:600;font-size:14px;color:#fff;list-style:none}
+summary::-webkit-details-marker{display:none}
+summary::after{content:'+';float:right;color:var(--accent)}
+details[open] summary::after{content:'–'}
+details p{font-size:14px;color:var(--muted);margin-top:8px}
+
+footer{border-top:1px solid var(--border2);padding:28px 16px 40px;text-align:center;font-size:12px;color:var(--dim)}
+footer a{color:var(--muted)}
+</style>
+</head>
+<body>
+
+<header class="hero">
+<div class="badge">Estrattore Fatture</div>
+<h1>Le tue fatture in <span>Excel</span>,<br>senza ricopiare niente</h1>
+<p>Carica PDF, XML o ZIP: il sito estrae i dati, li mette in Excel e separa i doppioni in un foglio a parte. Gli XML sono sempre gratis.</p>
+</header>
+
+<main class="wrap">
+
+<section id="prezzi">
+<h2>Scegli il pacchetto</h2>
+<p class="sub">I PDF vengono letti con l'intelligenza artificiale. Per questo oltre la quota gratuita si pagano.</p>
+<div class="plans">
+
+<div class="plan">
+<div><div class="plan-name">Gratis</div><div class="plan-for">Per provare o per poche fatture</div></div>
+<div class="price">0 €</div>
+<ul>
+<li>XML e ZIP di XML illimitati</li>
+<li>10 PDF al mese</li>
+<li>Nessuna registrazione</li>
+</ul>
+<a class="btn btn-ghost" data-link="APP_URL" href="#">Prova subito</a>
+<p class="note">Non serve nessun codice</p>
+</div>
+
+<div class="plan top">
+<span class="tag">Consigliato</span>
+<div><div class="plan-name">Pacchetto 100 PDF</div><div class="plan-for">Privati e piccole partite IVA</div></div>
+<div class="price">9 €<small>una tantum</small></div>
+<ul>
+<li>100 PDF da usare quando vuoi</li>
+<li>Nessuna scadenza</li>
+<li>XML sempre gratis</li>
+</ul>
+<a class="btn btn-main" data-link="PAYPAL_PACCHETTO" href="#" target="_blank" rel="noopener">Acquista con PayPal</a>
+<p class="note">Paghi anche con carta tramite PayPal</p>
+</div>
+
+<div class="plan">
+<div><div class="plan-name">Studio</div><div class="plan-for">Commercialisti e uffici amministrativi</div></div>
+<div class="price">24 €<small>al mese</small></div>
+<ul>
+<li>Fino a 500 PDF in 31 giorni</li>
+<li>XML sempre gratis</li>
+<li>Rinnovi solo se ti serve</li>
+</ul>
+<a class="btn btn-main" data-link="PAYPAL_STUDIO" href="#" target="_blank" rel="noopener">Acquista con PayPal</a>
+<p class="note">Nessun rinnovo automatico</p>
+</div>
+
+</div>
+</section>
+
+<section>
+<h2>Come funziona</h2>
+<p class="sub">Dal pagamento all'estrazione in tre passaggi.</p>
+<div class="steps">
+<div class="step"><h3>Paghi con PayPal</h3><p>Scegli il pacchetto e paga con il tuo conto PayPal o con carta.</p></div>
+<div class="step"><h3>Ricevi il codice</h3><p>Ti mandiamo il codice di sblocco all'email del tuo account PayPal, di solito entro poche ore.</p></div>
+<div class="step"><h3>Lo inserisci nel sito</h3><p>Incolli il codice nel riquadro "I tuoi crediti" e carichi i tuoi PDF.</p></div>
+</div>
+</section>
+
+<section>
+<h2>Domande frequenti</h2>
+<p class="sub">Le risposte alle domande più comuni.</p>
+<div class="faq">
+<details><summary>Le mie fatture vengono salvate?</summary>
+<p>No. I file vengono elaborati per creare l'Excel e poi scartati. Sul server non resta nessuna copia.</p></details>
+<details><summary>Cosa conta come un PDF?</summary>
+<p>Ogni file PDF caricato vale un credito, anche se si trova dentro uno ZIP. Gli XML non consumano crediti.</p></details>
+<details><summary>Cosa succede se finisco i crediti a metà?</summary>
+<p>Il sito ti avvisa prima di iniziare e non scala nulla. Puoi caricare meno PDF oppure acquistare un altro pacchetto.</p></details>
+<details><summary>Il pacchetto Studio si rinnova da solo?</summary>
+<p>No. Dura 31 giorni: se ti serve anche il mese dopo, lo riacquisti e ricevi un nuovo codice.</p></details>
+<details><summary>Non ho ricevuto il codice</summary>
+<p>Controlla lo spam, poi scrivici a <a data-link="EMAIL" href="#" class="mail">questo indirizzo</a> indicando l'email del pagamento PayPal.</p></details>
+</div>
+</section>
+
+</main>
+
+<footer>
+<p>Estrattore Fatture · <a data-link="EMAIL" href="#" class="mail">Contatti</a></p>
+<p style="margin-top:6px" id="piva"></p>
+</footer>
+
+<script>
+/* ═══ DA COMPLETARE: incolla qui i tuoi dati ═══════════════════════════ */
+const CONFIG = {
+  APP_URL:          "https://estrattore-fatture.onrender.com",
+  PAYPAL_PACCHETTO: "INCOLLA_QUI_IL_LINK_PAYPAL_DA_9_EURO",
+  PAYPAL_STUDIO:    "INCOLLA_QUI_IL_LINK_PAYPAL_DA_24_EURO",
+  EMAIL:            "tuaemail@esempio.it",
+  PARTITA_IVA:      ""   // quando l'avrai, es. "P.IVA 01234567890"
+};
+/* ═════════════════════════════════════════════════════════════════════ */
+document.querySelectorAll('[data-link]').forEach(a => {
+  const key = a.dataset.link;
+  const val = CONFIG[key] || "";
+  if (key === "EMAIL") { a.href = "mailto:" + val; if (a.classList.contains('mail') && a.textContent === "questo indirizzo") a.textContent = val; return; }
+  if (/^https?:\/\//.test(val)) { a.href = val; }
+  else { a.href = "#prezzi"; a.addEventListener('click', e => { e.preventDefault(); alert("Pagamento non ancora attivo: riprova tra poco."); }); }
+});
+document.getElementById('piva').textContent = CONFIG.PARTITA_IVA;
+</script>
+</body>
+</html>

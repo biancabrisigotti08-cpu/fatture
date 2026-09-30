@@ -3,624 +3,19 @@ Estrattore Fatture Web - Flask Backend
 """
 import zipfile
 import io
-import re
 import os
-import xml.etree.ElementTree as ET
-from pathlib import Path
+import json
+import urllib.parse
 import hmac
 from flask import Flask, request, send_file, jsonify, render_template_string, Response
-import openpyxl
-from openpyxl.styles import Font, PatternFill, Alignment
-from pypdf import PdfReader
 import crediti
+import estrazione
+import excel
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max upload
 PRICING_URL = os.environ.get("PRICING_URL", "#prezzi")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 crediti.inizializza()
-HEADER_BG   = "FF6B35"
-HEADER_FONT = "FFFFFF"
-IMPORTO_BOLLO = 2.00
-
-# ─── Parser XML FatturaPA ──────────────────────────────────────────────────────
-def find_text(element, *tags):
-   for tag in tags:
-       found = element.find('.//' + tag)
-       if found is not None and found.text:
-           return found.text.strip()
-       for child in element.iter():
-           local = child.tag.split('}')[-1] if '}' in child.tag else child.tag
-           if local == tag and child.text:
-               return child.text.strip()
-   return ""
-
-def parse_xml_fattura(xml_bytes):
-   try:
-       root = ET.fromstring(xml_bytes)
-   except ET.ParseError as e:
-       raise ValueError(f"XML non valido: {e}")
-   cedente_block = None
-   cessionario_block = None
-   for child in root.iter():
-       local = child.tag.split('}')[-1] if '}' in child.tag else child.tag
-       if local == "CedentePrestatore" and cedente_block is None:
-           cedente_block = child
-       if local == "CessionarioCommittente" and cessionario_block is None:
-           cessionario_block = child
-   cedente     = find_text(cedente_block, "Denominazione")     if cedente_block     else ""
-   cessionario = find_text(cessionario_block, "Denominazione") if cessionario_block else ""
-   numero_documento = find_text(root, "Numero")
-   data_documento   = find_text(root, "Data")
-   righe = []
-   for linea in root.iter():
-       local = linea.tag.split('}')[-1] if '}' in linea.tag else linea.tag
-       if local != "DettaglioLinee":
-           continue
-       descrizione_raw = find_text(linea, "Descrizione")
-       prezzo_totale   = find_text(linea, "PrezzoTotale")
-       try:
-           if abs(float(prezzo_totale)) == IMPORTO_BOLLO:
-               continue
-       except (ValueError, TypeError):
-           pass
-       telaio = ""
-       descrizione = ""
-       if descrizione_raw:
-           m = re.match(r'^(\S+)\s+RMK\S+\s+(.+)$', descrizione_raw.strip(), re.IGNORECASE)
-           if m:
-               telaio      = m.group(1).strip()
-               descrizione = m.group(2).strip()
-           else:
-               parts = descrizione_raw.strip().split(None, 1)
-               telaio      = parts[0] if parts else ""
-               descrizione = parts[1] if len(parts) > 1 else ""
-       righe.append({
-           "telaio": telaio,
-           "descrizione": descrizione,
-           "prezzo_totale": prezzo_totale,
-       })
-   return {
-       "cedente": cedente,
-       "cessionario": cessionario,
-       "numero_documento": numero_documento,
-       "data_documento": data_documento,
-       "righe": righe,
-   }
-
-# ─── Parser PDF — formato generico (PSA + Romana Diesel + altri) ──────────────
-def parse_pdf_fattura(pdf_bytes):
-   text = ""
-   reader = PdfReader(io.BytesIO(pdf_bytes))
-   for page in reader.pages:
-       t = page.extract_text()
-       if t:
-           text += t + "\n"
-   lines = text.splitlines()
-   # Cedente
-   cedente = ""
-   for i, l in enumerate(lines):
-       if re.search(r'cedente|prestatore|fornitore', l, re.IGNORECASE):
-           for j in range(i+1, min(i+6, len(lines))):
-               nl = lines[j].strip()
-               if nl and not re.match(r'^[A-Z\s/()]{6,}$', nl):
-                   cedente = nl
-                   break
-           if cedente:
-               break
-   if not cedente:
-       for l in lines[:10]:
-           nl = l.strip()
-           if nl and len(nl) > 3:
-               cedente = nl
-               break
-   # Cessionario
-   cessionario = ""
-   for i, l in enumerate(lines):
-       if re.search(r'cessionario|committente|spett', l, re.IGNORECASE):
-           for j in range(i+1, min(i+6, len(lines))):
-               nl = lines[j].strip()
-               if nl and not re.match(r'^[A-Z\s/()]{6,}$', nl):
-                   cessionario = nl
-                   break
-           if cessionario:
-               break
-   # Numero documento
-   numero_documento = ""
-   # Formato VW: "TD01 (fattura) 000866019 16980504532 30-03-2026"
-   m = re.search(r'TD0\d\s*\([^)]+\)\s*(\d{6,})', text, re.IGNORECASE)
-   if m:
-       numero_documento = m.group(1).strip()
-   else:
-       # Formato VW alternativo: "NUMERO DOCUMENTO ART. 73 NUMERO DOCUMENTO\n...000866019"
-       m = re.search(r'NUMERO\s+DOCUMENTO(?:\s+ART[.\s]+\d+)?\s*[\n\r]+\s*(?:ART[.\s]+\d+\s*[\n\r]+\s*)?(\d{6,})', text, re.IGNORECASE)
-       if m:
-           numero_documento = m.group(1).strip()
-   if not numero_documento:
-       # Formato PSA: "NUMERO DOCUMENTO\n1181358498"
-       m = re.search(r'NUMERO\s+DOCUMENTO\s*[\n\r]+\s*(\S+)', text, re.IGNORECASE)
-       if m:
-           val = m.group(1).strip()
-           if not re.match(r'^[A-Z]+$', val, re.IGNORECASE):
-               numero_documento = val
-   if not numero_documento:
-       # Formato Romana Diesel: "Numero\nG000617"
-       m = re.search(r'\bNumero\b\s*[\n\r]+\s*([A-Z0-9]+)', text, re.IGNORECASE)
-       if m:
-           numero_documento = m.group(1).strip()
-   if not numero_documento:
-       m = re.search(r'\bNumero\b\s+([A-Z0-9]{4,})', text, re.IGNORECASE)
-       if m:
-           numero_documento = m.group(1).strip()
-   # Data documento
-   data_documento = ""
-   m = re.search(r'DATA\s+DOCUMENTO\s*[\n\r\s]+(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})', text, re.IGNORECASE)
-   if m:
-       data_documento = m.group(1).strip()
-   else:
-       m = re.search(r'\bdata\b\s*[\n\r]+\s*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})', text, re.IGNORECASE)
-       if m:
-           data_documento = m.group(1).strip()
-       else:
-           m = re.search(r'(\d{1,2}[-/]\d{2}[-/]\d{4})', text)
-           if m:
-               data_documento = m.group(1).strip()
-   is_psa_format     = bool(re.search(r'RMK\w+', text))
-   is_romana_format  = bool(re.search(r'RIF\.TARGA', text, re.IGNORECASE))
-   is_vw_format      = bool(re.search(r'Tipo dato:TELAIO', text, re.IGNORECASE))
-   righe = []
-   if is_vw_format:
-       # ── Parser Volkswagen — usa numeri di riga come separatori ──
-       # Il testo reale dai log mostra che prima di ogni "ADDEBITO PENALE PER"
-       # c'è un numero di riga (es. "30\nADDEBITO PENALE PER DANNI -\n...")
-       # Usiamo il pattern "\nN.\n" o "\nN \n" come separatore di blocco.
-       # Questo funziona anche quando il blocco va a capo pagina perché
-       # il numero di riga appare sempre prima della descrizione.
-       import pdfplumber
-       # Estrai testo pagina per pagina con pdfplumber (più preciso sui \n)
-       full_pages_text = []
-       try:
-           with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-               for page in pdf.pages:
-                   t = page.extract_text(layout=True)
-                   if t:
-                       full_pages_text.append(t)
-       except Exception:
-           full_pages_text = [text]
-       # Unisci tutto il testo delle pagine con un marcatore di pagina
-       combined = '\n'.join(full_pages_text)
-       # Cerca tutti i numeri di riga nel testo
-       # Pattern: numero intero su riga propria (o con spazi) seguito da ADDEBITO
-       # Dal PDF reale: "30 ADDEBITO PENALE PER DANNI -"
-       # oppure su righe separate: "30\nADDEBITO PENALE PER DANNI"
-       row_pattern = re.compile(
-           r'(\d+)\s+ADDEBITO\s+PENALE\s+PER',
-           re.IGNORECASE
-       )
-       matches = list(row_pattern.finditer(combined))
-       print(f"=== Blocchi VW trovati: {len(matches)} ===")
-       for idx, match in enumerate(matches):
-           block_start = match.start()
-           block_end = matches[idx + 1].start() if idx + 1 < len(matches) else len(combined)
-           blocco_text = combined[block_start:block_end]
-           # Descrizione
-           desc_upper = blocco_text.upper()
-           if 'ELEMENTI TECNICI' in desc_upper:
-               desc_val = 'Addebito Penale per Elementi Tecnici Mancanti'
-           elif 'ECCEDENZA' in desc_upper or 'CHILOMETRICA' in desc_upper:
-               desc_val = 'Addebito Penale per Eccedenza Chilometrica'
-           elif 'DANNI' in desc_upper:
-               desc_val = 'Addebito Penale per Danni'
-           else:
-               desc_val = 'Addebito Penale'
-           # Telaio — cerca in tutto il blocco
-           m_telaio = re.search(
-               r'Tipo\s*dato:\s*TELAIO\s*[\n\r]+\s*Rif\.\s*testo:\s*(\S+)',
-               blocco_text, re.IGNORECASE
-           )
-           if not m_telaio:
-               m_telaio = re.search(r'Rif\.\s*testo:\s*([A-Z0-9]{17})\b', blocco_text, re.IGNORECASE)
-           telaio_val = m_telaio.group(1).strip() if m_telaio else ""
-           # Targa — cerca in tutto il blocco
-           m_targa = re.search(
-               r'Tipo\s*dato:\s*TARGA\s*[\n\r]+\s*Rif\.\s*testo:\s*(\S+)',
-               blocco_text, re.IGNORECASE
-           )
-           if not m_targa:
-               m_targa = re.search(r'(?<!\w)([A-Z]{2}\d{3}[A-Z]{2})(?!\w)', blocco_text, re.IGNORECASE)
-           targa_val = m_targa.group(1).strip() if m_targa else ""
-           # Prezzo
-           m_prezzo = re.search(
-               r'[\d,.]+\s+N[12T]\s+([\d]{1,3}(?:[.,]\d{3})*[.,]\d{2})',
-               blocco_text, re.IGNORECASE
-           )
-           prezzo_val = ""
-           if m_prezzo:
-               prezzo_val = m_prezzo.group(1).replace('.', '').replace(',', '.')
-           try:
-               if prezzo_val and abs(float(prezzo_val)) == IMPORTO_BOLLO:
-                   continue
-           except (ValueError, TypeError):
-               pass
-           if not prezzo_val:
-               continue
-           print(f"  Riga {match.group(1)}: telaio={telaio_val} targa={targa_val} prezzo={prezzo_val}")
-           righe.append({
-               "targa":         targa_val,
-               "telaio":        telaio_val,
-               "descrizione":   desc_val,
-               "prezzo_totale": prezzo_val,
-           })
-   elif is_psa_format:
-       row_start_re = re.compile(r'^\s*(\d+)\s*$')
-       desc_re = re.compile(r'([A-Z0-9]{8,})\s+(RMK\S+)\s+(.*)', re.IGNORECASE)
-       i = 0
-       while i < len(lines):
-           line = lines[i].strip()
-           if row_start_re.match(line):
-               block_lines = []
-               j = i + 1
-               while j < len(lines):
-                   next_line = lines[j].strip()
-                   if row_start_re.match(next_line) and next_line != line:
-                       break
-                   block_lines.append(next_line)
-                   j += 1
-               telaio = ""
-               descrizione = ""
-               for bl in block_lines:
-                   md = desc_re.search(bl)
-                   if md:
-                       telaio = md.group(1).strip()
-                       descrizione = md.group(3).strip()
-                       break
-               prezzo_totale = ""
-               for bl in reversed(block_lines):
-                   if re.search(r'\bN\d\b', bl):
-                       nums = re.findall(r'[\d]+[.,][\d]+', bl)
-                       if nums:
-                           prezzo_totale = nums[-1].replace(',', '.')
-                       break
-               try:
-                   if prezzo_totale and abs(float(prezzo_totale)) == IMPORTO_BOLLO:
-                       i = j
-                       continue
-               except (ValueError, TypeError):
-                   pass
-               if telaio or prezzo_totale:
-                   righe.append({"targa": "", "telaio": telaio, "descrizione": descrizione, "prezzo_totale": prezzo_totale})
-               i = j
-           else:
-               i += 1
-   elif is_romana_format:
-       targa_pattern = re.compile(r'RIF\.TARGA\s+([A-Z0-9]+)', re.IGNORECASE)
-       current_targa = ""
-       for i, line in enumerate(lines):
-           mt = targa_pattern.search(line)
-           if mt:
-               current_targa = mt.group(1).strip()
-               continue
-           line_stripped = line.strip()
-           if not line_stripped:
-               continue
-           if re.search(r'bollo', line_stripped, re.IGNORECASE):
-               continue
-           if re.search(r'imponibile|totale fattura|pagamento|p\.i\.|partita|sede|tel|fax|bonifico|iva|aliq|q\.t[\xc3\xa0a]|prezzo unitario|importo netto|descrizione', line_stripped, re.IGNORECASE):
-               continue
-           m = re.match(r'^([A-Z][A-Z\s]+?)\s+([\d]{1,3}(?:\.\d{3})*,\d{2})\s*(?:\d+)?$', line_stripped)
-           if m and current_targa:
-               desc = m.group(1).strip()
-               importo = m.group(2).replace('.', '').replace(',', '.')
-               try:
-                   val = float(importo)
-                   if val == IMPORTO_BOLLO:
-                       continue
-               except ValueError:
-                   continue
-               righe.append({"targa": current_targa, "telaio": "", "descrizione": desc, "prezzo_totale": importo})
-   else:
-       for line in lines:
-           line_stripped = line.strip()
-           if re.search(r'bollo', line_stripped, re.IGNORECASE):
-               continue
-           m = re.match(r'^(.+?)\s+([\d]{1,3}(?:\.\d{3})*,\d{2})\s*(?:\d+)?$', line_stripped)
-           if m:
-               desc = m.group(1).strip()
-               importo = m.group(2).replace('.', '').replace(',', '.')
-               try:
-                   val = float(importo)
-                   if val == IMPORTO_BOLLO:
-                       continue
-               except ValueError:
-                   continue
-               if len(desc) > 2:
-                   righe.append({"targa": "", "telaio": "", "descrizione": desc, "prezzo_totale": importo})
-   return {"cedente": cedente, "cessionario": cessionario,
-           "numero_documento": numero_documento, "data_documento": data_documento, "righe": righe}
-
-def extract_xml_from_pdf(pdf_bytes: bytes):
-   """Tenta di estrarre un XML FatturaPA allegato dentro il PDF."""
-   try:
-       from pypdf import PdfReader
-       reader = PdfReader(io.BytesIO(pdf_bytes))
-       # Cerca allegati nel PDF
-       if '/Names' in reader.trailer['/Root']:
-           names = reader.trailer['/Root']['/Names']
-           if '/EmbeddedFiles' in names:
-               ef = names['/EmbeddedFiles']
-               if '/Names' in ef:
-                   files = ef['/Names']
-                   for i in range(0, len(files), 2):
-                       name = str(files[i])
-                       filespec = files[i+1].get_object()
-                       if '/EF' in filespec:
-                           ef_stream = filespec['/EF']['/F'].get_object()
-                           data = ef_stream.get_data()
-                           if b'FatturaElettronica' in data or b'<?xml' in data:
-                               return data
-   except Exception as e:
-       print(f"Nessun XML allegato trovato nel PDF: {e}")
-   return None
-
-# La chiave NON va mai scritta nel codice: si imposta su Render come variabile d'ambiente.
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash").strip()
-GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
-import base64
-import urllib.request
-import urllib.error
-import json as json_lib
-def extract_with_gemini(pdf_bytes: bytes) -> list:
-   """Usa Gemini AI per estrarre i dati dalla fattura PDF."""
-   if not GEMINI_API_KEY:
-       raise RuntimeError("GEMINI_API_KEY non impostata")
-   pdf_b64 = base64.b64encode(pdf_bytes).decode('utf-8')
-   prompt = """Analizza questa fattura italiana ed estrai i dati in formato JSON.
-Restituisci SOLO un oggetto JSON valido, senza markdown, senza testo aggiuntivo.
-Formato richiesto:
-{
- "cedente": "nome completo del fornitore",
- "cessionario": "nome completo del cliente",
- "numero_documento": "numero fattura (solo cifre o alfanumerico)",
- "data_documento": "data nel formato gg-mm-aaaa",
- "righe": [
-   {
-     "targa": "targa veicolo formato AA000AA oppure stringa vuota",
-     "telaio": "codice telaio 17 caratteri oppure stringa vuota",
-     "descrizione": "descrizione della riga (es. ADDEBITO PENALE PER DANNI)",
-     "prezzo_totale": "importo numerico con punto come decimale es. 202.98"
-   }
- ]
-}
-Regole importanti:
-- Ogni riga del dettaglio deve avere targa E telaio — se sono su pagine diverse appartengono comunque alla stessa riga
-- Escludi righe con importo esattamente 2.00 (bollo virtuale)
-- Il telaio ha sempre 17 caratteri alfanumerici
-- La targa ha sempre 7 caratteri formato AA000AA
-- Restituisci SOLO il JSON"""
-   payload = {
-       "contents": [{
-           "parts": [
-               {"text": prompt},
-               {"inline_data": {"mime_type": "application/pdf", "data": pdf_b64}}
-           ]
-       }],
-       "generationConfig": {"temperature": 0, "maxOutputTokens": 8192,
-                            "responseMimeType": "application/json"}
-   }
-   req = urllib.request.Request(
-       GEMINI_URL,
-       data=json_lib.dumps(payload).encode('utf-8'),
-       headers={"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY},
-       method="POST"
-   )
-   try:
-       with urllib.request.urlopen(req, timeout=110) as resp:
-           result = json_lib.loads(resp.read().decode('utf-8'))
-   except urllib.error.HTTPError as e:
-       dettaglio = e.read().decode('utf-8', 'replace')[:300]
-       raise RuntimeError(f"Gemini HTTP {e.code}: {dettaglio}")
-   parts = result['candidates'][0]['content']['parts']
-   text = "".join(p.get('text', '') for p in parts if not p.get('thought'))
-   text = re.sub(r'```json|```', '', text).strip()
-   return json_lib.loads(text)
-
-def process_pdf_bytes(pdf_bytes, all_rows):
-   try:
-       # Prima prova a estrarre XML allegato dentro il PDF
-       xml_data = extract_xml_from_pdf(pdf_bytes)
-       if xml_data:
-           print("XML trovato dentro il PDF - uso parser XML")
-           return process_xml_bytes(xml_data, all_rows)
-       # Usa Gemini AI per leggere qualsiasi formato PDF
-       print("Uso Gemini AI per leggere il PDF...")
-       try:
-           fattura = extract_with_gemini(pdf_bytes)
-           righe = fattura.get("righe", [])
-           base = {
-               "cedente":           fattura.get("cedente", ""),
-               "cessionario":       fattura.get("cessionario", ""),
-               "numero_documento":  fattura.get("numero_documento", ""),
-               "data_documento":    fattura.get("data_documento", ""),
-           }
-           count = 0
-           for r in righe:
-               try:
-                   p = float(str(r.get("prezzo_totale", "0")).replace(',', '.'))
-                   if abs(p) == 2.0:
-                       continue
-               except:
-                   pass
-               all_rows.append({**base,
-                   "targa":         r.get("targa", ""),
-                   "telaio":        r.get("telaio", ""),
-                   "descrizione":   r.get("descrizione", ""),
-                   "prezzo_totale": str(r.get("prezzo_totale", "")),
-               })
-               count += 1
-           print(f"Gemini: {count} righe estratte")
-           return count
-       except Exception as e:
-           print(f"Gemini fallito: {e} — uso parser locale")
-       # Fallback: parser locale
-       fattura = parse_pdf_fattura(pdf_bytes)
-       righe   = fattura.pop("righe", [])
-       for r in righe:
-           all_rows.append({**fattura, **r})
-       return len(righe)
-   except Exception as e:
-       print(f"Errore PDF: {e}")
-       return 0
-
-def process_xml_bytes(xml_bytes, all_rows):
-   try:
-       fattura = parse_xml_fattura(xml_bytes)
-       righe   = fattura.pop("righe", [])
-       for r in righe:
-           all_rows.append({**fattura, **r})
-       return len(righe)
-   except Exception as e:
-       return 0
-
-def process_zip_bytes(zip_bytes, all_rows, depth=0):
-   try:
-       with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
-           entries = zf.namelist()
-           xml_entries = [n for n in entries if n.lower().endswith('.xml')
-                         and not n.startswith('__MACOSX')
-                         and not n.lower().endswith('signature.xml')]
-           pdf_entries = [n for n in entries if n.lower().endswith('.pdf')
-                         and not n.startswith('__MACOSX')]
-           zip_entries = [n for n in entries if n.lower().endswith('.zip')
-                         and not n.startswith('__MACOSX')]
-           for xml_name in xml_entries:
-               process_xml_bytes(zf.read(xml_name), all_rows)
-           for pdf_name in pdf_entries:
-               process_pdf_bytes(zf.read(pdf_name), all_rows)
-           for zip_name in zip_entries:
-               process_zip_bytes(zf.read(zip_name), all_rows, depth + 1)
-   except zipfile.BadZipFile:
-       pass
-
-# ─── Excel builder ────────────────────────────────────────────────────────────
-def valida_targa(targa: str) -> str:
-   """Valida e restituisce la targa se valida, altrimenti stringa vuota.
-   Formato valido: 2 lettere + 3 cifre + 2 lettere (es. AA000AA), 7 caratteri totali."""
-   t = targa.strip().upper()
-   if len(t) != 7:
-       return ""
-   if re.match(r'^[A-Z]{2}\d{3}[A-Z]{2}$', t):
-       return t
-   return ""
-
-def valida_telaio(telaio: str) -> str:
-   """Valida e restituisce il telaio se valido, altrimenti stringa vuota.
-   Formato valido: 17 caratteri, inizia con lettere, finisce con numeri."""
-   t = telaio.strip().upper()
-   if len(t) != 17:
-       return ""
-   # Inizia con almeno 2 lettere e finisce con almeno 4 cifre
-   if re.match(r'^[A-Z]{2,}.*\d{4,}$', t):
-       return t
-   return ""
-
-def valida_numero_documento(numero: str) -> str:
-   """Restituisce il numero documento se valido (numerico o alfanumerico tipo G000617)."""
-   n = numero.strip()
-   # Accetta numeri puri (000866019) o alfanumerici (G000617)
-   # Esclude parole come "DOCUMENTO", "ART", ecc.
-   if re.match(r'^[A-Z0-9]{4,}$', n, re.IGNORECASE) and not re.match(r'^[A-Z]+$', n, re.IGNORECASE):
-       return n
-   return ""
-
-def to_float(val):
-   try:
-       return float(str(val).replace(',', '.'))
-   except (ValueError, AttributeError):
-       return None
-
-def get_categoria(descrizione: str) -> str:
-   """Estrae la categoria dalla descrizione, solo parole chiave specifiche."""
-   d = descrizione.lower()
-   if "forfait" in d:
-       return "Forfait"
-   if "over plafond" in d:
-       return "Over Plafond"
-   if "km eccedenti" in d or "esubero km" in d:
-       return "Km Eccedenti"
-   if "eam" in d:
-       return "EAM"
-   if "tagliando" in d:
-       return "Tagliando"
-   if "perizia" in d:
-       return "Perizia"
-   return ""
-
-def build_row(row):
-   descrizione = row.get("descrizione", "")
-   targa  = valida_targa(row.get("targa", ""))
-   telaio = valida_telaio(row.get("telaio", ""))
-   return [
-       row.get("cedente", ""),
-       row.get("cessionario", ""),
-       valida_numero_documento(row.get("numero_documento", "")),
-       row.get("data_documento", ""),
-       targa,
-       telaio,
-       to_float(row.get("prezzo_totale", "")),
-       descrizione,
-       get_categoria(descrizione),
-   ]
-
-def write_header(ws, headers, col_widths):
-   header_fill = PatternFill("solid", fgColor=HEADER_BG)
-   header_font = Font(bold=True, color=HEADER_FONT)
-   for c, (h, w) in enumerate(zip(headers, col_widths), start=1):
-       cell = ws.cell(row=1, column=c, value=h)
-       cell.fill = header_fill
-       cell.font = header_font
-       cell.alignment = Alignment(horizontal="center", vertical="center")
-       ws.column_dimensions[openpyxl.utils.get_column_letter(c)].width = w
-   ws.row_dimensions[1].height = 20
-   ws.freeze_panes = "A2"
-
-def build_excel(all_rows):
-   headers    = ["Cedente", "Cessionario", "N. Documento", "Data Documento",
-                 "Targa", "Telaio", "Prezzo Totale (€)",
-                 "Descrizione (Forfait/Over Plafond/ETM/EAM/KM…)",
-                 "Descrizione"]
-   col_widths = [30, 30, 18, 16, 14, 22, 18, 45, 18]
-   CATEGORIE = ["EAM", "Forfait", "Km Eccedenti", "Over Plafond", "Tagliando"]
-   # Filtra BOLLO
-   filtered = [r for r in all_rows
-               if "bollo" not in r.get("descrizione", "").lower()
-               and "bollo" not in r.get("telaio", "").lower()]
-   # Duplicati
-   seen, uniq, dups = {}, [], []
-   for r in filtered:
-       key = (r.get("cedente",""), r.get("cessionario",""),
-              r.get("numero_documento",""), r.get("data_documento",""),
-              r.get("telaio",""), r.get("prezzo_totale",""), r.get("descrizione",""))
-       if key in seen:
-           dups.append(r)
-       else:
-           seen[key] = True
-           uniq.append(r)
-   wb = openpyxl.Workbook()
-   # ── Foglio 1: Fatture ──
-   ws1 = wb.active
-   ws1.title = "Fatture"
-   write_header(ws1, headers, col_widths)
-   for row in uniq:
-       ws1.append(build_row(row))
-   # ── Foglio 2: Duplicati ──
-   ws2 = wb.create_sheet(title="Duplicati")
-   write_header(ws2, headers, col_widths)
-   for row in dups:
-       ws2.append(build_row(row))
-   out = io.BytesIO()
-   wb.save(out)
-   out.seek(0)
-   return out, len(uniq), len(dups)
 
 # ─── HTML Template ────────────────────────────────────────────────────────────
 HTML = '''<!DOCTYPE html>
@@ -703,12 +98,16 @@ h1 span{
  font-size:16px;color:var(--muted);font-weight:400;
  max-width:480px;margin:0 auto;line-height:1.6;
 }
-.hero-stats{
- display:flex;gap:32px;justify-content:center;margin-top:40px;flex-wrap:wrap;
+.hero-features{
+ list-style:none;display:flex;flex-direction:column;gap:10px;
+ max-width:520px;margin:32px auto 0;text-align:left;
 }
-.stat{text-align:center}
-.stat-val{font-family:'Space Grotesk',sans-serif;font-size:24px;font-weight:700;color:#fff}
-.stat-label{font-size:12px;color:var(--muted);margin-top:2px}
+.hero-features li{
+ font-size:14px;color:var(--text);line-height:1.5;
+ display:flex;gap:10px;align-items:baseline;
+}
+.hero-features li::before{content:'✓';color:var(--accent);font-weight:700;flex-shrink:0}
+.hero-features strong{color:#fff;font-weight:600}
 /* MAIN */
 .main{width:100%;max-width:680px;padding:40px 24px 0;display:flex;flex-direction:column;gap:20px}
 /* CARD */
@@ -891,12 +290,12 @@ h1 span{
 <div class="hero">
 <div class="hero-badge">Estrattore Fatture</div>
 <h1>Da fattura a <span>Excel</span><br>in pochi secondi</h1>
-<p class="hero-sub">Carica XML, PDF o ZIP — il sistema estrae automaticamente tutti i dati strutturati.</p>
-<div class="hero-stats">
-<div class="stat"><div class="stat-val">3</div><div class="stat-label">Formati supportati</div></div>
-<div class="stat"><div class="stat-val">∞</div><div class="stat-label">File per volta</div></div>
-<div class="stat"><div class="stat-val">2</div><div class="stat-label">Fogli Excel</div></div>
-</div>
+<p class="hero-sub">Carica le tue fatture: il sito legge i dati e li mette in un file Excel pronto da usare.</p>
+<ul class="hero-features">
+<li><span><strong>Formati supportati:</strong> PDF (anche scansioni), XML FatturaPA, XML firmati .p7m e ZIP</span></li>
+<li><span>Estrazione dei dati di qualsiasi fattura su Excel: fornitore, partita IVA, numero, data, imponibile, IVA, totale e righe di dettaglio</span></li>
+<li><span>Foglio separato con i doppioni, per eliminare le righe ripetute che creano ridondanza</span></li>
+</ul>
 </div>
 <!-- MAIN -->
 <div class="main">
@@ -906,14 +305,14 @@ h1 span{
 <div class="card-icon">📂</div>
 <div>
 <div class="card-title">Carica i tuoi file</div>
-<div class="card-sub">XML, PDF o ZIP · anche più file insieme</div>
+<div class="card-sub">PDF, XML, P7M o ZIP · anche più file insieme</div>
 </div>
 </div>
 <label class="drop-zone" id="dropZone">
-<input type="file" id="fileInput" accept=".xml,.zip,.pdf" multiple style="display:none"/>
+<input type="file" id="fileInput" accept=".xml,.zip,.pdf,.p7m" multiple style="display:none"/>
 <div class="drop-icon-wrap">⬇</div>
 <div class="drop-text">Trascina qui i file oppure clicca</div>
-<div class="drop-sub">XML · PDF · ZIP supportati</div>
+<div class="drop-sub">PDF · XML · P7M · ZIP</div>
 </label>
 <div class="or-row">oppure</div>
 <label class="folder-btn">
@@ -921,7 +320,7 @@ h1 span{
 <div class="folder-icon">🗂</div>
 <div class="folder-text">
 <div class="folder-label">Carica una cartella intera</div>
-<div class="folder-desc">Prende automaticamente tutti gli XML e ZIP al suo interno</div>
+<div class="folder-desc">Prende automaticamente tutti i PDF, XML, P7M e ZIP al suo interno</div>
 </div>
 </label>
 </div>
@@ -1026,7 +425,7 @@ function showPaywall(msg){
 }
 function addFiles(newFiles) {
  const valid = Array.from(newFiles).filter(f =>
-   ['xml','zip','pdf'].some(ext => f.name.toLowerCase().endsWith('.'+ext))
+   ['xml','zip','pdf','p7m'].some(ext => f.name.toLowerCase().endsWith('.'+ext))
  );
  const existing = new Set(selectedFiles.map(f => f.name+f.size));
  valid.forEach(f => { if(!existing.has(f.name+f.size)) selectedFiles.push(f); });
@@ -1104,8 +503,9 @@ async function handleRun(){
    const fatture=resp.headers.get('X-Rows-Fatture')||'?';
    const dups=resp.headers.get('X-Rows-Duplicati')||'?';
    log('Elaborazione completata con successo','ok');
-   log('Foglio Fatture: '+fatture+' righe','ok');
-   log('Foglio Duplicati: '+dups+' righe','ok');
+   log('Fatture lette: '+fatture,'ok');
+   log('Fatture doppie spostate nel foglio Duplicati: '+dups,'ok');
+   try{ JSON.parse(decodeURIComponent(resp.headers.get('X-Avvisi')||'%5B%5D')).forEach(a=>log('Attenzione: '+a,'err')); }catch(e){}
    setProgress(100);
    const blob=await resp.blob();
    const url=URL.createObjectURL(blob);
@@ -1115,8 +515,8 @@ async function handleRun(){
    document.body.removeChild(a);URL.revokeObjectURL(url);
    const banner=document.getElementById('doneBanner');
    document.getElementById('doneStats').innerHTML=`
-<div class="done-stat"><div class="done-stat-val">${fatture}</div><div class="done-stat-label">Righe fatture</div></div>
-<div class="done-stat"><div class="done-stat-val">${dups}</div><div class="done-stat-label">Duplicati trovati</div></div>`;
+<div class="done-stat"><div class="done-stat-val">${fatture}</div><div class="done-stat-label">Fatture lette</div></div>
+<div class="done-stat"><div class="done-stat-val">${dups}</div><div class="done-stat-label">Doppioni trovati</div></div>`;
    banner.classList.add('show','fade-in');
    refreshQuota();
  }catch(e){
@@ -1256,18 +656,16 @@ def process():
                "pdf_disponibili": disp,
                "pricing_url": PRICING_URL,
            }), 402
-   all_rows = []
+   fatture, avvisi = [], []
    for name, data in caricati:
-       if name.endswith('.xml'):
-           process_xml_bytes(data, all_rows)
-       elif name.endswith('.pdf'):
-           process_pdf_bytes(data, all_rows)
-       elif name.endswith('.zip'):
-           process_zip_bytes(data, all_rows)
-   if not all_rows:
-       return jsonify({"error": "Nessun dato estratto dai file caricati"}), 422
+       fatture += estrazione.leggi_file(name, data, avvisi)
+   for a in avvisi:
+       print("Avviso:", a)
+   if not fatture:
+       dettaglio = ("; ".join(avvisi[:5])) if avvisi else "formati non riconosciuti"
+       return jsonify({"error": f"Nessuna fattura letta dai file caricati ({dettaglio})"}), 422
    crediti.addebita(client, codice, n_pdf)
-   excel_bytes, n_fatture, n_dups = build_excel(all_rows)
+   excel_bytes, n_fatture, n_dups = excel.crea_excel(fatture)
    response = send_file(
        excel_bytes,
        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -1276,7 +674,8 @@ def process():
    )
    response.headers['X-Rows-Fatture']   = str(n_fatture)
    response.headers['X-Rows-Duplicati'] = str(n_dups)
-   response.headers['Access-Control-Expose-Headers'] = 'X-Rows-Fatture, X-Rows-Duplicati'
+   response.headers['X-Avvisi'] = urllib.parse.quote(json.dumps(avvisi[:20], ensure_ascii=False))
+   response.headers['Access-Control-Expose-Headers'] = 'X-Rows-Fatture, X-Rows-Duplicati, X-Avvisi'
    return response
 
 if __name__ == '__main__':
