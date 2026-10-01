@@ -276,6 +276,13 @@ h1 span{
 .code-btn{background:var(--surface2);border:1px solid rgba(255,107,53,0.4);color:var(--accent2);border-radius:10px;
  padding:10px 16px;font-family:'Inter',sans-serif;font-size:13px;font-weight:600;cursor:pointer}
 .code-btn:hover{background:rgba(255,107,53,0.1)}
+.lang-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+ background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:14px 20px}
+.lang-label{font-size:13px;color:var(--muted)}
+.lang-switch{display:flex;background:var(--surface2);border:1px solid var(--border2);border-radius:10px;padding:3px}
+.lang-switch input{display:none}
+.lang-switch label{font-size:13px;font-weight:600;color:var(--muted);padding:7px 14px;border-radius:8px;cursor:pointer}
+.lang-switch input:checked+label{background:rgba(255,107,53,0.15);color:var(--accent2)}
 .buy-link{color:var(--accent2);font-weight:600}
 .paywall{background:rgba(255,107,53,0.08);border:1px solid rgba(255,107,53,0.3);border-radius:16px;padding:20px;
  display:none;font-size:14px;line-height:1.6}
@@ -352,6 +359,14 @@ h1 span{
 <div class="quota-line">Ti servono più PDF? <a class="buy-link" href="{{ pricing_url }}" target="_blank" rel="noopener">Vedi i pacchetti</a></div>
 </div>
 </div>
+<!-- LINGUA EXCEL -->
+<div class="lang-row">
+<span class="lang-label">Lingua del file Excel</span>
+<div class="lang-switch">
+<input type="radio" name="lingua" id="lingIt" value="it" checked/><label for="lingIt">Italiano</label>
+<input type="radio" name="lingua" id="lingEn" value="en"/><label for="lingEn">English</label>
+</div>
+</div>
 <!-- PAYWALL -->
 <div class="paywall" id="paywall"></div>
 <!-- RUN -->
@@ -375,7 +390,7 @@ h1 span{
 <div class="done-card" id="doneBanner">
 <div class="done-icon">✅</div>
 <div class="done-title">Estrazione completata!</div>
-<div class="done-sub">Il file <strong>estrazione_fatture.xlsx</strong> è stato scaricato</div>
+<div class="done-sub">Il file <strong id="doneName">estrazione_fatture.xlsx</strong> è stato scaricato</div>
 <div class="done-stats" id="doneStats"></div>
 </div>
 <div class="footer">
@@ -416,6 +431,8 @@ function saveCode(){
  setCode(c); refreshQuota();
 }
 document.getElementById('codeInput').value=getCode();
+try{ const l=localStorage.getItem('fe_lingua'); if(l==='en'){ document.getElementById('lingEn').checked=true; } }catch(e){}
+document.querySelectorAll('input[name=lingua]').forEach(r=>r.addEventListener('change',()=>{ try{ localStorage.setItem('fe_lingua',r.value); }catch(e){} }));
 refreshQuota();
 function showPaywall(msg){
  const p=document.getElementById('paywall');
@@ -485,6 +502,8 @@ async function handleRun(){
  setProgress(20);
  const fd=new FormData();
  selectedFiles.forEach(f=>fd.append('files',f));
+ const lingua=(document.querySelector('input[name=lingua]:checked')||{}).value||'it';
+ fd.append('lingua',lingua);
  try{
    log('Invio '+selectedFiles.length+' file al server…','info');
    document.getElementById('paywall').classList.remove('show');
@@ -512,7 +531,9 @@ async function handleRun(){
    const blob=await resp.blob();
    const url=URL.createObjectURL(blob);
    const a=document.createElement('a');
-   a.href=url;a.download='estrazione_fatture.xlsx';
+   const nomeFile=lingua==='en'?'invoices_extracted.xlsx':'estrazione_fatture.xlsx';
+   document.getElementById('doneName').textContent=nomeFile;
+   a.href=url;a.download=nomeFile;
    document.body.appendChild(a);a.click();
    document.body.removeChild(a);URL.revokeObjectURL(url);
    const banner=document.getElementById('doneBanner');
@@ -667,12 +688,14 @@ def process():
        dettaglio = ("; ".join(avvisi[:5])) if avvisi else "formati non riconosciuti"
        return jsonify({"error": f"Nessuna fattura letta dai file caricati ({dettaglio})"}), 422
    crediti.addebita(client, codice, n_pdf)
-   excel_bytes, n_fatture, n_dups = excel.crea_excel(fatture)
+   lingua = request.form.get('lingua', 'it')
+   lingua = lingua if lingua in ('it', 'en') else 'it'
+   excel_bytes, n_fatture, n_dups = excel.crea_excel(fatture, lingua)
    response = send_file(
        excel_bytes,
        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
        as_attachment=True,
-       download_name='estrazione_fatture.xlsx'
+       download_name=excel.nome_file(lingua)
    )
    response.headers['X-Rows-Fatture']   = str(n_fatture)
    response.headers['X-Rows-Duplicati'] = str(n_dups)
