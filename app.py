@@ -23,7 +23,9 @@ HTML = '''<!DOCTYPE html>
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Estrattore Fatture</title>
+<title>Estrattore Fatture – Converti fatture XML, P7M e PDF in Excel</title>
+<meta name="description" content="Carica fatture elettroniche XML, file .p7m, PDF o ZIP e scarica subito un Excel con fornitori, importi, IVA e righe. XML gratis e illimitati."/>
+<link rel="icon" href="https://fatture-in-excel.netlify.app/favicon.svg" type="image/svg+xml"/>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
