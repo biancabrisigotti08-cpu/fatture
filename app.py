@@ -9,6 +9,7 @@ import urllib.parse
 import hmac
 from flask import Flask, request, send_file, jsonify, render_template_string, Response
 import crediti
+import statistiche
 import estrazione
 import excel
 app = Flask(__name__)
@@ -16,6 +17,13 @@ app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max upload
 PRICING_URL = os.environ.get("PRICING_URL", "#prezzi")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 crediti.inizializza()
+statistiche.inizializza()
+
+def tipo_utente(codice):
+   info = crediti.info_codice(codice)
+   if info and info['valido']:
+       return 'illimitato' if info['illimitato'] else 'codice'
+   return 'gratis'
 
 # ─── HTML Template ────────────────────────────────────────────────────────────
 HTML = '''<!DOCTYPE html>
@@ -556,7 +564,7 @@ async function handleRun(){
 ADMIN_HTML = '''<!DOCTYPE html>
 <html lang="it"><head><meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Admin codici</title>
+<title>Admin Estrattore Fatture</title>
 <style>
 body{font-family:system-ui,sans-serif;background:#0a0a0f;color:#f0f0f5;max-width:760px;margin:0 auto;padding:24px 16px}
 h1{font-size:22px;margin-bottom:16px}h2{font-size:16px;margin:28px 0 10px;color:#ff9a6c}
@@ -570,10 +578,44 @@ table{width:100%;border-collapse:collapse;font-size:13px}
 th,td{text-align:left;padding:7px 6px;border-bottom:1px solid #ffffff12}
 th{color:#7070a0;font-weight:500}td code{color:#ff9a6c}
 .wrap{overflow-x:auto}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.card{background:#111118;border:1px solid #ffffff18;border-radius:12px;padding:14px}
+.card h3{font-size:13px;color:#a0a0c0;font-weight:500;margin:0 0 10px}
+.card dl{display:grid;grid-template-columns:1fr auto;gap:6px 10px;margin:0;font-size:14px}
+.card dt{color:#a0a0c0}.card dd{margin:0;text-align:right;font-weight:600;color:#fff;font-variant-numeric:tabular-nums}
+.card dd.hot{color:#ff9a6c}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+.nota{font-size:12px;color:#7070a0;margin-top:8px;line-height:1.5}
+nav.tabs{display:flex;gap:16px;margin-bottom:8px;font-size:14px}nav.tabs a{color:#ff9a6c}
 </style></head><body>
-<h1>Codici di sblocco</h1>
+<h1>Estrattore Fatture · Admin</h1>
+<nav class="tabs"><a href="#statistiche">Statistiche</a><a href="#codici">Codici</a></nav>
+
+<h2 id="statistiche">Statistiche di utilizzo</h2>
+<div class="cards">
+{% for nome, n in stat.periodi %}<div class="card"><h3>{{ nome }}</h3><dl>
+<dt>Visite alla pagina</dt><dd>{{ n.visite }}</dd>
+<dt>Visitatori diversi</dt><dd>{{ n.visitatori }}</dd>
+<dt>Estrazioni fatte</dt><dd>{{ n.estrazioni }}</dd>
+<dt>Persone che hanno estratto</dt><dd>{{ n.utenti }}</dd>
+<dt>Fatture lette</dt><dd>{{ n.fatture }}</dd>
+<dt>di cui da PDF</dt><dd>{{ n.pdf }}</dd>
+<dt>Bloccati per crediti finiti</dt><dd class="hot">{{ n.bloccati }}</dd>
+</dl></div>{% endfor %}
+</div>
+<p class="nota">"Bloccati per crediti finiti" sono le persone che volevano più PDF di quelli gratuiti: i tuoi potenziali clienti.
+Il tuo uso personale con il codice illimitato non è conteggiato (ultimi 30 giorni: {{ stat.personale.estrazioni }} estrazioni, {{ stat.personale.fatture }} fatture).
+Si contano le persone tramite un'impronta anonima della connessione: chi usa più reti risulta più volte.</p>
+
+<h2>Ultimi 14 giorni</h2>
+<div class="wrap"><table>
+<tr><th>Giorno</th><th class="n">Visite</th><th class="n">Visitatori</th><th class="n">Estrazioni</th><th class="n">Fatture</th><th class="n">PDF</th><th class="n">Bloccati</th><th class="n">Nessun dato letto</th></tr>
+{% for g, n in stat.giorni %}<tr><td>{{ g[8:10] }}/{{ g[5:7] }}</td><td class="n">{{ n.visite }}</td><td class="n">{{ n.visitatori }}</td><td class="n">{{ n.estrazioni }}</td><td class="n">{{ n.fatture }}</td><td class="n">{{ n.pdf }}</td><td class="n">{{ n.bloccati }}</td><td class="n">{{ n.vuote }}</td></tr>{% endfor %}
+</table></div>
+
+<h2 id="codici">Codici di sblocco</h2>
 {% if nuovo %}<div class="nuovo">Codice creato, copialo e mandalo al cliente:<br><code>{{ nuovo }}</code></div>{% endif %}
-<form method="post">
+<form method="post" action="/admin#codici">
 <label>Tipo
 <select name="tipo">
 <option value="pacchetto">Pacchetto PDF (nessuna scadenza)</option>
@@ -622,10 +664,13 @@ def admin():
            nuovo = crediti.crea_codice(n, giorni, nota)
        else:
            nuovo = crediti.crea_codice(n, None, nota)
-   return render_template_string(ADMIN_HTML, nuovo=nuovo, codici=crediti.elenco_codici())
+   return render_template_string(ADMIN_HTML, nuovo=nuovo, codici=crediti.elenco_codici(),
+                                 stat=statistiche.riepilogo())
 
 @app.route('/')
 def index():
+   if not statistiche.e_un_bot(request.headers.get('User-Agent')):
+       statistiche.registra(crediti.client_id(request), 'visita')
    return render_template_string(HTML, free_pdf=crediti.FREE_PDF_MONTH, pricing_url=PRICING_URL)
 
 def conta_pdf(name, data, depth=0):
@@ -668,9 +713,11 @@ def process():
    n_pdf = sum(conta_pdf(name, data) for name, data in caricati)
    client = crediti.client_id(request)
    codice = request.headers.get('X-Codice', '')
+   tipo = tipo_utente(codice)
    if n_pdf:
        disp = crediti.disponibili(client, codice)
        if disp is not None and n_pdf > disp:
+           statistiche.registra(client, 'quota', tipo, len(caricati), n_pdf)
            return jsonify({
                "error": f"Hai caricato {n_pdf} PDF ma te ne restano {disp}. "
                         f"Gli XML sono sempre gratis; per i PDF oltre la quota serve un codice.",
@@ -685,12 +732,14 @@ def process():
    for a in avvisi:
        print("Avviso:", a)
    if not fatture:
+       statistiche.registra(client, 'vuoto', tipo, len(caricati), n_pdf)
        dettaglio = ("; ".join(avvisi[:5])) if avvisi else "formati non riconosciuti"
        return jsonify({"error": f"Nessuna fattura letta dai file caricati ({dettaglio})"}), 422
    crediti.addebita(client, codice, n_pdf)
    lingua = request.form.get('lingua', 'it')
    lingua = lingua if lingua in ('it', 'en') else 'it'
    excel_bytes, n_fatture, n_dups = excel.crea_excel(fatture, lingua)
+   statistiche.registra(client, 'ok', tipo, len(caricati), n_pdf, n_fatture)
    response = send_file(
        excel_bytes,
        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
